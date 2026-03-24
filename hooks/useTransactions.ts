@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { GraphData, WrapperContract } from '@/types/graph';
+import { GraphData, WrapperContract, DataProvenance } from '@/types/graph';
 import { generateMockData, appendMockTransactions } from '@/lib/mockGenerator';
 import { buildGraphData } from '@/lib/graphUtils';
 import { useAppStore } from '@/store/appStore';
@@ -19,6 +19,7 @@ export function useTransactions(): UseTransactionsResult {
   const setStats = useAppStore((s) => s.setStats);
   const setLiveLoading = useAppStore((s) => s.setLiveLoading);
   const setDataError = useAppStore((s) => s.setDataError);
+  const setProvenance = useAppStore((s) => s.setProvenance);
 
   const [graphData, setGraphData] = useState<GraphData>(() => generateMockData());
   const [loading, setLoading] = useState(false);
@@ -37,6 +38,7 @@ export function useTransactions(): UseTransactionsResult {
     const initial = generateMockData(Date.now());
     setGraphData(initial);
     setStats(initial.nodes.length, initial.links.length);
+    setProvenance(null);
     setDataError(null);
 
     intervalRef.current = setInterval(() => {
@@ -47,7 +49,7 @@ export function useTransactions(): UseTransactionsResult {
         return next;
       });
     }, SIMULATION_REFRESH_MS);
-  }, [setStats, setDataError]);
+  }, [setStats, setProvenance, setDataError]);
 
   // ── Live mode ──────────────────────────────────────────────────────────────
   const fetchLive = useCallback(async () => {
@@ -59,6 +61,7 @@ export function useTransactions(): UseTransactionsResult {
       const data: {
         transactions: Parameters<typeof buildGraphData>[0];
         wrapperContracts: WrapperContract[];
+        provenance: DataProvenance | null;
         error?: string;
       } = await res.json();
 
@@ -67,6 +70,7 @@ export function useTransactions(): UseTransactionsResult {
       const graph = buildGraphData(data.transactions ?? [], data.wrapperContracts ?? []);
       setGraphData(graph);
       setStats(graph.nodes.length, graph.links.length);
+      setProvenance(data.provenance ?? null);
       setDataError(null);
     } catch (err) {
       if (!mountedRef.current) return;
@@ -75,7 +79,7 @@ export function useTransactions(): UseTransactionsResult {
     } finally {
       if (mountedRef.current) setLiveLoading(false);
     }
-  }, [setStats, setLiveLoading, setDataError]);
+  }, [setStats, setProvenance, setLiveLoading, setDataError]);
 
   const startLive = useCallback(() => {
     fetchLive();

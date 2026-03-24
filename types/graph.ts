@@ -19,23 +19,40 @@ export interface GraphNode {
   isHub: boolean;           // high-degree generic hub
   isWrapperContract: boolean; // true = Zama cToken wrapper contract
   tokenSymbol?: string;     // only for wrapper contracts: "USDT", "WETH", etc.
-  tvs?: number;             // Total Value Shielded in USD (wrapper contracts only)
+  tvs?: number;             // Total Value Shielded in raw units (wrapper contracts only)
+  /** Fixed 3D position — prevents the physics sim from moving these nodes */
+  fx?: number;
+  fy?: number;
+  fz?: number;
 }
 
-/** A transaction edge */
+/** A transaction edge (may represent multiple aggregated on-chain transactions) */
 export interface GraphLink {
   source: string | GraphNode;
   target: string | GraphNode;
   txHash: string;
   token: string;            // displayed name (e.g. "cUSDC" in Avec Zama)
   tokenBase: string;        // base name (always "USDC")
-  amount: number;           // raw amount (0 for confidential transfers)
+  /**
+   * The semantic transformation this edge represents:
+   *   wrap          → "USDC → cUSDC"
+   *   unwrap        → "cUSDC → USDC"
+   *   confidential  → "cUSDC"
+   */
+  transformLabel: string;
+  amount: number;           // raw amount of most recent txn (0 for confidential)
   amountFormatted: string;  // human readable OR "🔒 Encrypted"
   decimals: number;
   blockNumber?: number;
   eventType: EventType;
   isLive: boolean;
   curvature?: number;
+
+  // ── Aggregation (multiple real txns collapsed into one visual edge) ──────
+  aggregatedCount: number;       // 1 for single txns; >1 when aggregated
+  txHashes: string[];            // all tx hashes (index 0 = most recent)
+  blockNumbers: number[];        // corresponding block numbers
+  totalAmount: number;           // sum of all raw amounts in this edge
 }
 
 export interface GraphData {
@@ -57,9 +74,20 @@ export interface LiveTransaction {
   from: string;
   to: string;
   token: string;
+  transformLabel: string;   // "USDT → cUSDT", "cUSDT → USDT", "cUSDT"
   amount: number;
   amountFormatted: string;
   decimals: number;
   blockNumber: number;
   eventType: EventType;
+}
+
+/** On-chain data provenance — proves the live graph is real, not mocked */
+export interface DataProvenance {
+  source: string;                // "zamadashboard.org · Supabase"
+  supabaseUrl: string;           // the public Supabase project URL
+  totalWrapEvents: number;       // total rows in wrapper_events table
+  totalConfidential: number;     // total rows in confidential_transfers table
+  blockRange: { min: number; max: number } | null;
+  fetchedAt: string;             // ISO timestamp
 }

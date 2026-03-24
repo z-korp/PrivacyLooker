@@ -3,7 +3,6 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '@/store/appStore';
 import { GraphNode, GraphLink } from '@/types/graph';
-import { toConfidential, truncateAddress } from '@/lib/tokenConfig';
 
 // ── Node panel ────────────────────────────────────────────────────────────────
 function NodePanel({ node, isAvecZama }: { node: GraphNode; isAvecZama: boolean }) {
@@ -82,39 +81,53 @@ const EVENT_STYLES = {
   transfer:     { color: '#888888', label: 'Transfer',                subLabel: 'ERC-20' },
 } as const;
 
+// Show at most this many tx hashes in the scrollable list
+const MAX_VISIBLE_TXS = 8;
+
 function LinkPanel({ link, isAvecZama }: { link: GraphLink; isAvecZama: boolean }) {
   const from = typeof link.source === 'string' ? link.source : link.source.address;
   const to   = typeof link.target === 'string' ? link.target : link.target.address;
-  const displayToken = isAvecZama ? toConfidential(link.tokenBase) : link.tokenBase;
   const style = EVENT_STYLES[link.eventType as keyof typeof EVENT_STYLES] ?? EVENT_STYLES.transfer;
   const isConfidential = link.eventType === 'confidential';
+  const isAggregated = link.aggregatedCount > 1;
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2">
-        <div className="w-3 h-px flex-shrink-0" style={{ backgroundColor: style.color }} />
-        <span className="font-mono text-xs font-semibold" style={{ color: style.color }}>
-          {style.label}
+      {/* ── Transformation headline ── */}
+      <div className="flex flex-col gap-0.5">
+        <span className="font-mono text-sm font-bold tracking-wide" style={{ color: style.color }}>
+          {link.transformLabel}
         </span>
-        <span
-          className="font-mono text-[8px] px-1.5 py-0.5 rounded border ml-auto"
-          style={{ borderColor: `${style.color}40`, color: style.color }}
-        >
-          {displayToken}
-        </span>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-px flex-shrink-0" style={{ backgroundColor: style.color }} />
+          <span className="font-mono text-[9px] opacity-70" style={{ color: style.color }}>
+            {style.label}
+          </span>
+          {isAggregated && (
+            <span
+              className="ml-auto font-mono text-[8px] px-1.5 py-0.5 rounded border"
+              style={{ borderColor: `${style.color}40`, color: style.color, backgroundColor: `${style.color}10` }}
+            >
+              {link.aggregatedCount} txns
+            </span>
+          )}
+        </div>
       </div>
 
+      {/* ── Amount ── */}
       <div>
-        <span className="font-mono text-[9px] text-white/30 uppercase tracking-wider block mb-1">Amount</span>
+        <span className="font-mono text-[9px] text-white/30 uppercase tracking-wider block mb-1">
+          {isAggregated ? 'Total Volume' : 'Amount'}
+        </span>
         {isConfidential ? (
           <div className="flex flex-col gap-1">
             <span className="font-mono text-sm" style={{ color: '#c084fc' }}>🔒 FHE Encrypted</span>
             <span className="font-mono text-[9px] text-white/25 leading-relaxed">
-              Amount permanently encrypted — never knowable in plaintext, even by validators.
+              Amount permanently encrypted by FHE — never readable, even by validators.
             </span>
           </div>
         ) : isAvecZama ? (
-          <span className="font-mono text-base text-zama-yellow">🔒 <span className="text-sm">Encrypted</span></span>
+          <span className="font-mono text-base" style={{ color: '#FFD200' }}>🔒 Encrypted</span>
         ) : (
           <span className="font-mono text-xl font-bold text-white">
             {link.amountFormatted}{' '}
@@ -123,33 +136,59 @@ function LinkPanel({ link, isAvecZama }: { link: GraphLink; isAvecZama: boolean 
         )}
       </div>
 
+      {/* ── From / To addresses ── */}
       <div className="flex flex-col gap-1.5">
         <div>
           <span className="font-mono text-[9px] text-white/30 uppercase tracking-wider block">From</span>
-          <code className="font-mono text-[10px] text-white/60">{truncateAddress(from)}</code>
+          <code className="font-mono text-[10px] text-white/60 break-all">{from}</code>
         </div>
         <div>
           <span className="font-mono text-[9px] text-white/30 uppercase tracking-wider block">To</span>
-          <code className="font-mono text-[10px] text-white/60">{truncateAddress(to)}</code>
+          <code className="font-mono text-[10px] text-white/60 break-all">{to}</code>
         </div>
       </div>
 
-      {link.isLive && (
-        <div className="flex flex-col gap-1">
+      {/* ── Transaction list ── */}
+      {link.isLive && link.txHashes.length > 0 && (
+        <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-            <span className="font-mono text-[9px] text-green-400">Live on-chain</span>
+            <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0" />
+            <span className="font-mono text-[9px] text-green-400">
+              {isAggregated
+                ? `${link.aggregatedCount} on-chain transactions · showing ${Math.min(link.txHashes.length, MAX_VISIBLE_TXS)}`
+                : 'Live on-chain'}
+            </span>
           </div>
-          <a
-            href={`https://etherscan.io/tx/${link.txHash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="font-mono text-[9px] hover:underline"
-            style={{ color: '#4ade80' }}
+
+          <div
+            className="flex flex-col gap-1 overflow-y-auto pr-1"
+            style={{ maxHeight: isAggregated ? '130px' : 'none' }}
           >
-            Verify on Etherscan ↗
-          </a>
-          <code className="font-mono text-[8px] text-white/15 break-all mt-0.5">{link.txHash}</code>
+            {link.txHashes.slice(0, MAX_VISIBLE_TXS).map((hash, i) => (
+              <div key={hash} className="flex items-center gap-2">
+                {link.blockNumbers[i] != null && (
+                  <span className="font-mono text-[8px] text-white/25 flex-shrink-0">
+                    #{link.blockNumbers[i]}
+                  </span>
+                )}
+                <a
+                  href={`https://etherscan.io/tx/${hash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-mono text-[8px] hover:underline truncate"
+                  style={{ color: '#4ade80' }}
+                  title={hash}
+                >
+                  {hash.slice(0, 14)}…{hash.slice(-6)} ↗
+                </a>
+              </div>
+            ))}
+            {link.txHashes.length > MAX_VISIBLE_TXS && (
+              <span className="font-mono text-[8px] text-white/20">
+                + {link.txHashes.length - MAX_VISIBLE_TXS} more
+              </span>
+            )}
+          </div>
         </div>
       )}
     </div>

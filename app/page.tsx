@@ -5,6 +5,8 @@ import { DataModeSwitch } from '@/components/overlay/DataModeSwitch';
 import { Legend } from '@/components/overlay/Legend';
 import { InfoPanel } from '@/components/overlay/InfoPanel';
 import { ErrorBanner } from '@/components/overlay/ErrorBanner';
+import { GifExporter } from '@/components/overlay/GifExporter';
+import { DataProvenanceBadge } from '@/components/overlay/DataProvenanceBadge';
 
 export default function Home() {
   return (
@@ -19,6 +21,8 @@ export default function Home() {
       <DataModeSwitch />
       <InfoPanel />
       <ErrorBanner />
+      <GifExporter />
+      <DataProvenanceBadge />
     </main>
   );
 }

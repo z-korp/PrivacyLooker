@@ -50,9 +50,12 @@ export function generateMockData(txSeed = 42): GraphData {
   const nodes: GraphNode[] = [];
   const addressPool: string[] = [];
 
-  // ── Pre-seed Zama wrapper contract nodes ─────────────────────────────────
+  // ── Pre-seed Zama wrapper contract nodes (pinned in a ring) ─────────────
   const maxTvs = Math.max(...MOCK_WRAPPER_CONTRACTS.map((w) => w.tvs));
-  for (const wc of MOCK_WRAPPER_CONTRACTS) {
+  const RING_R = 220;
+  for (let wi = 0; wi < MOCK_WRAPPER_CONTRACTS.length; wi++) {
+    const wc = MOCK_WRAPPER_CONTRACTS[wi];
+    const angle = (wi / MOCK_WRAPPER_CONTRACTS.length) * Math.PI * 2;
     nodes.push({
       id: wc.address,
       address: wc.address,
@@ -63,6 +66,10 @@ export function generateMockData(txSeed = 42): GraphData {
       isWrapperContract: true,
       tokenSymbol: wc.tokenSymbol,
       tvs: wc.tvs,
+      // Fixed 3D position — physics sim will not move these
+      fx: RING_R * Math.cos(angle),
+      fy: RING_R * Math.sin(angle) * 0.55,  // flattened ellipse for perspective
+      fz: (wi % 2 === 0 ? 1 : -1) * 35,     // alternating Z depth
     });
     addressPool.push(wc.address);
   }
@@ -138,18 +145,30 @@ export function generateMockData(txSeed = 42): GraphData {
     nodes[fromIdx].txCount++;
     nodes[toIdx].txCount++;
 
+    const sym = token.symbol;
+    const transformLabel =
+      eventType === 'wrap'         ? `${sym} → c${sym}` :
+      eventType === 'unwrap'       ? `c${sym} → ${sym}` :
+      /* confidential */             `c${sym}`;
+
+    const txHash = mockHash();
     links.push({
       source: addressPool[fromIdx],
       target: addressPool[toIdx],
-      txHash: mockHash(),
-      token: token.symbol,
-      tokenBase: token.symbol,
+      txHash,
+      token: sym,
+      tokenBase: sym,
+      transformLabel,
       amount: rawAmount,
       amountFormatted: eventType === 'confidential' ? '🔒 Encrypted' : formatTokenAmount(rawAmount, token.decimals),
       decimals: token.decimals,
       eventType,
       isLive: false,
       curvature: eventType === 'confidential' ? 0.35 : 0.1,
+      aggregatedCount: 1,
+      txHashes: [txHash],
+      blockNumbers: [],
+      totalAmount: rawAmount,
     });
   }
 
@@ -223,18 +242,28 @@ export function appendMockTransactions(
     const rawAmount = eventType === 'confidential' ? 0
       : Math.floor(rng() * 5_000_000 * Math.pow(10, token.decimals));
 
+    const sym = token.symbol;
+    const liveHash = rHash();
     links.push({
       source: addressPool[fromIdx],
       target: addressPool[toIdx],
-      txHash: rHash(),
-      token: token.symbol,
-      tokenBase: token.symbol,
+      txHash: liveHash,
+      token: sym,
+      tokenBase: sym,
+      transformLabel:
+        eventType === 'wrap'   ? `${sym} → c${sym}` :
+        eventType === 'unwrap' ? `c${sym} → ${sym}` :
+                                 `c${sym}`,
       amount: rawAmount,
       amountFormatted: eventType === 'confidential' ? '🔒 Encrypted' : formatTokenAmount(rawAmount, token.decimals),
       decimals: token.decimals,
       eventType,
       isLive: false,
       curvature: eventType === 'confidential' ? 0.35 : 0.1,
+      aggregatedCount: 1,
+      txHashes: [liveHash],
+      blockNumbers: [],
+      totalAmount: rawAmount,
     });
   }
 

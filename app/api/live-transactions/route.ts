@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { LiveTransaction, EventType, WrapperContract } from '@/types/graph';
+import { LiveTransaction, EventType, WrapperContract, DataProvenance } from '@/types/graph';
 import { formatTokenAmount } from '@/lib/tokenConfig';
 
 // Zama Dashboard public Supabase (anon key — read-only, publicly embedded on zamadashboard.org)
@@ -15,14 +15,41 @@ const HEADERS = {
   'Content-Type': 'application/json',
 };
 
+/** Regular fetch — returns rows */
 async function sb<T>(table: string, params: Record<string, string>): Promise<T[]> {
   const q = new URLSearchParams({ select: '*', ...params });
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${q}`, {
-    headers: HEADERS,
-    next: { revalidate: 30 },
-  });
-  if (!res.ok) throw new Error(`Supabase ${table}: ${res.status}`);
+  const url = `${SUPABASE_URL}/rest/v1/${table}?${q}`;
+  const res = await fetch(url, { headers: HEADERS, next: { revalidate: 30 } });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Supabase ${table} ${res.status}: ${body.slice(0, 120)}`);
+  }
   return res.json();
+}
+
+/**
+ * Count-only fetch via PostgREST `Prefer: count=exact`.
+ * Returns the total number of matching rows from the Content-Range header.
+ * Example: Content-Range: 0-0/37414 → returns 37414
+ */
+async function sbCount(table: string, params: Record<string, string>): Promise<number> {
+  const q = new URLSearchParams({ select: 'transaction_hash', limit: '1', ...params });
+  const url = `${SUPABASE_URL}/rest/v1/${table}?${q}`;
+  const res = await fetch(url, {
+    headers: { ...HEADERS, Prefer: 'count=exact' },
+    next: { revalidate: 300 },
+  });
+  if (!res.ok) return 0;
+  const cr = res.headers.get('content-range') ?? '';
+  const total = parseInt(cr.split('/')[1] ?? '0', 10);
+  return isNaN(total) ? 0 : total;
+}
+
+/** Parse an amount string that may be in scientific notation (e.g. "2.476e+24") */
+function parseAmount(raw: string | null | undefined): number {
+  if (!raw) return 0;
+  const n = parseFloat(raw);
+  return isFinite(n) ? n : 0;
 }
 
 // ── Types matching Supabase schema ───────────────────────────────────────────
@@ -54,7 +81,6 @@ interface ConfidentialTransfer {
   transaction_hash: string;
   block_number: number;
   wrapper_address: string;
-  token_address: string;
   token_symbol: string;
   from_address: string;
   to_address: string;
@@ -73,11 +99,11 @@ async function fetchWrapperContracts(): Promise<WrapperContract[]> {
     tokenAddress: r.token_address.toLowerCase(),
     tokenSymbol: r.token_symbol,
     tokenDecimals: r.token_decimals,
-    tvs: r.tvs_onchain ? Number(r.tvs_onchain) : 0,
+    tvs: r.tvs_onchain ? parseAmount(r.tvs_onchain) : 0,
   }));
 }
 
-async function fetchShieldEvents(limit = 60): Promise<LiveTransaction[]> {
+async function fetchShieldEvents(limit = 300): Promise<LiveTransaction[]> {
   const rows = await sb<WrapperEvent>('wrapper_events', {
     order: 'block_number.desc',
     limit: String(limit),
@@ -85,14 +111,17 @@ async function fetchShieldEvents(limit = 60): Promise<LiveTransaction[]> {
   });
 
   return rows
-    .filter((e) => (e.from_address || e.receiver_address) && e.amount && Number(e.amount) > 0)
+    .filter((e) => {
+      const hasActor =
+        e.event_type === 'Wrap' ? !!e.from_address : !!e.receiver_address;
+      return hasActor;
+    })
     .map((e): LiveTransaction => {
-      const raw = BigInt(e.cleartext_amount ?? e.amount ?? '0');
-      const decimals = e.token_decimals ?? 18;
+      const rawAmount = parseAmount(e.cleartext_amount ?? e.amount);
+      const decimals = e.token_decimals ?? 6;
       const eventType: EventType = e.event_type === 'Wrap' ? 'wrap' : 'unwrap';
+      const sym = e.token_symbol;
 
-      // Wrap (Shield):   user wallet → wrapper contract
-      // Unwrap (Unshield): wrapper contract → user wallet
       const from =
         e.event_type === 'Wrap'
           ? (e.from_address ?? e.wrapper_address)
@@ -102,13 +131,17 @@ async function fetchShieldEvents(limit = 60): Promise<LiveTransaction[]> {
           ? e.wrapper_address
           : (e.receiver_address ?? e.to_address ?? e.wrapper_address);
 
+      const transformLabel =
+        eventType === 'wrap' ? `${sym} → c${sym}` : `c${sym} → ${sym}`;
+
       return {
         txHash: e.transaction_hash,
         from: from.toLowerCase(),
         to: to.toLowerCase(),
-        token: e.token_symbol,
-        amount: Number(raw),
-        amountFormatted: formatTokenAmount(raw, decimals),
+        token: sym,
+        transformLabel,
+        amount: rawAmount,
+        amountFormatted: rawAmount > 0 ? formatTokenAmount(rawAmount, decimals) : '0',
         decimals,
         blockNumber: e.block_number,
         eventType,
@@ -116,12 +149,11 @@ async function fetchShieldEvents(limit = 60): Promise<LiveTransaction[]> {
     });
 }
 
-async function fetchConfidentialTransfers(limit = 40): Promise<LiveTransaction[]> {
+async function fetchConfidentialTransfers(limit = 100): Promise<LiveTransaction[]> {
   const rows = await sb<ConfidentialTransfer>('confidential_transfers', {
     order: 'block_number.desc',
     limit: String(limit),
-    // Exclude mint events (from = zero address = Shield already captured above)
-    'from_address': `neq.${ZERO_ADDR}`,
+    from_address: `neq.${ZERO_ADDR}`,
   });
 
   return rows
@@ -138,7 +170,7 @@ async function fetchConfidentialTransfers(limit = 40): Promise<LiveTransaction[]
       from: e.from_address.toLowerCase(),
       to: e.to_address.toLowerCase(),
       token: e.token_symbol,
-      // Amount is FHE-encrypted — never knowable in plaintext
+      transformLabel: `c${e.token_symbol}`,
       amount: 0,
       amountFormatted: '🔒 Encrypted',
       decimals: 6,
@@ -151,20 +183,48 @@ async function fetchConfidentialTransfers(limit = 40): Promise<LiveTransaction[]
 
 export async function GET() {
   try {
-    const [wrapperContracts, shieldTxs, confidentialTxs] = await Promise.all([
-      fetchWrapperContracts(),
-      fetchShieldEvents(60),
-      fetchConfidentialTransfers(40),
-    ]);
+    const [wrapperContracts, shieldTxs, confidentialTxs, totalWrap, totalConf] =
+      await Promise.all([
+        fetchWrapperContracts(),
+        fetchShieldEvents(300),
+        fetchConfidentialTransfers(100),
+        sbCount('wrapper_events', { status: 'eq.success' }),
+        sbCount('confidential_transfers', { from_address: `neq.${ZERO_ADDR}` }),
+      ]);
 
-    const transactions: LiveTransaction[] = [...shieldTxs, ...confidentialTxs];
+    const allTxs = [...shieldTxs, ...confidentialTxs];
+
+    // Block range across all fetched transactions
+    const blockNumbers = allTxs.map((t) => t.blockNumber).filter(Boolean);
+    const blockRange =
+      blockNumbers.length > 0
+        ? { min: Math.min(...blockNumbers), max: Math.max(...blockNumbers) }
+        : null;
+
+    const provenance: DataProvenance = {
+      source: 'zamadashboard.org · Supabase',
+      supabaseUrl: SUPABASE_URL,
+      totalWrapEvents: totalWrap,
+      totalConfidential: totalConf,
+      blockRange,
+      fetchedAt: new Date().toISOString(),
+    };
 
     return NextResponse.json(
-      { transactions, wrapperContracts, fetchedAt: new Date().toISOString() },
+      {
+        transactions: allTxs,
+        wrapperContracts,
+        provenance,
+        fetchedAt: provenance.fetchedAt,
+      },
       { headers: { 'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=60' } }
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: msg, transactions: [], wrapperContracts: [] }, { status: 503 });
+    console.error('[live-transactions]', msg);
+    return NextResponse.json(
+      { error: msg, transactions: [], wrapperContracts: [], provenance: null },
+      { status: 503 }
+    );
   }
 }
