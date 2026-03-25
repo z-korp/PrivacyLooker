@@ -5,9 +5,9 @@ import { useAppStore } from '@/store/appStore';
 import { GraphNode, GraphLink } from '@/types/graph';
 
 // ── Node panel ────────────────────────────────────────────────────────────────
-function NodePanel({ node, isAvecZama }: { node: GraphNode; isAvecZama: boolean }) {
+function NodePanel({ node }: { node: GraphNode; isAvecZama: boolean }) {
   const isWrapper = node.isWrapperContract;
-  const accent = isWrapper ? '#FFD200' : isAvecZama ? '#FFD200' : '#ffffff';
+  const accent    = isWrapper ? '#FFD200' : '#FFD200';
 
   return (
     <div className="flex flex-col gap-3">
@@ -15,22 +15,19 @@ function NodePanel({ node, isAvecZama }: { node: GraphNode; isAvecZama: boolean 
         {isWrapper ? (
           <motion.div
             className="w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0"
-            animate={{
-              borderColor: '#FFD200',
-              boxShadow: '0 0 8px 2px rgba(255,210,0,0.5)',
-            }}
+            animate={{ borderColor: '#FFD200', boxShadow: '0 0 8px 2px rgba(255,210,0,0.5)' }}
           >
-            <div className="w-1 h-1 rounded-full" style={{ backgroundColor: '#FFD200' }} />
+            <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: '#FFD200' }} />
           </motion.div>
         ) : (
-          <motion.div className="w-3 h-3 rounded-full flex-shrink-0" animate={{ backgroundColor: accent }} />
+          <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: '#FFD200', opacity: 0.6 }} />
         )}
         <span className="font-mono text-xs font-semibold" style={{ color: accent }}>
           {isWrapper ? `c${node.tokenSymbol} Wrapper` : 'Wallet'}
         </span>
         {isWrapper && (
           <span
-            className="font-mono text-[8px] px-1.5 py-0.5 rounded border ml-auto"
+            className="font-mono text-[9px] px-1.5 py-0.5 rounded border ml-auto"
             style={{ borderColor: '#FFD20055', color: '#FFD200', backgroundColor: '#FFD20010' }}
           >
             Zama Contract
@@ -75,10 +72,10 @@ function NodePanel({ node, isAvecZama }: { node: GraphNode; isAvecZama: boolean 
 
 // ── Link panel ────────────────────────────────────────────────────────────────
 const EVENT_STYLES = {
-  wrap:         { color: '#4ade80', label: '⬆ Shield',               subLabel: 'Wrap' },
-  unwrap:       { color: '#f87171', label: '⬇ Unshield',             subLabel: 'Unwrap' },
+  wrap:         { color: '#4ade80', label: '⬆ Shield',   subLabel: 'Wrap' },
+  unwrap:       { color: '#f87171', label: '⬇ Unshield', subLabel: 'Unwrap' },
   confidential: { color: '#a78bfa', label: '🔒 Confidential Transfer', subLabel: 'FHE Encrypted' },
-  transfer:     { color: '#888888', label: 'Transfer',                subLabel: 'ERC-20' },
+  transfer:     { color: '#888888', label: 'Transfer',   subLabel: 'ERC-20' },
 } as const;
 
 // Show at most this many tx hashes in the scrollable list
@@ -201,8 +198,7 @@ export function InfoPanel() {
   const selectedLink    = useAppStore((s) => s.selectedLink);
   const setSelectedNode = useAppStore((s) => s.setSelectedNode);
   const setSelectedLink = useAppStore((s) => s.setSelectedLink);
-  const privacyMode     = useAppStore((s) => s.privacyMode);
-  const isAvecZama      = privacyMode === 'avec-zama';
+  const isAvecZama = true; // always FHE mode
   const isOpen          = selectedNode !== null || selectedLink !== null;
   const isWrapper       = selectedNode?.isWrapperContract ?? false;
 

@@ -16,7 +16,6 @@ const SWEEP_RADIANS = (5 / 6) * Math.PI * 2;
 
 export function GifExporter() {
   const fgInstance  = useAppStore((s) => s.fgInstance);
-  const privacyMode = useAppStore((s) => s.privacyMode);
   const dataMode    = useAppStore((s) => s.dataMode);
 
   const [exportState, setExportState] = useState<ExportState>('idle');
@@ -116,7 +115,7 @@ export function GifExporter() {
     const url   = URL.createObjectURL(blob);
     const a     = document.createElement('a');
     a.href      = url;
-    const label = `zkorp-zama-${dataMode}-${privacyMode}`;
+    const label = `zkorp-zama-${dataMode}-fhe`;
     a.download  = `${label}-${Date.now()}.gif`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 15_000);
@@ -127,15 +126,13 @@ export function GifExporter() {
       setProgress(0);
       setShowPanel(false);
     }, 2500);
-  }, [fgInstance, privacyMode, dataMode]);
+  }, [fgInstance, dataMode]);
 
   const handleCancel = useCallback(() => {
     cancelRef.current = true;
-    // Camera will be restored in the loop exit handler
   }, []);
 
-  const isActive   = exportState !== 'idle';
-  const isAvecZama = privacyMode === 'avec-zama';
+  const isActive = exportState !== 'idle';
 
   return (
     <div className="fixed bottom-24 right-6 z-20 flex flex-col items-end gap-2">
@@ -149,7 +146,7 @@ export function GifExporter() {
             className="rounded-xl border p-4 w-64 flex flex-col gap-3"
             style={{
               background: 'rgba(0,0,0,0.92)',
-              borderColor: isAvecZama ? 'rgba(255,210,0,0.25)' : 'rgba(255,255,255,0.1)',
+              borderColor: true ? 'rgba(255,210,0,0.25)' : 'rgba(255,255,255,0.1)',
               backdropFilter: 'blur(16px)',
             }}
           >
@@ -159,8 +156,8 @@ export function GifExporter() {
             </p>
             <div className="flex flex-col gap-1 text-[9px] font-mono text-white/30">
               <div>Mode: <span className="text-white/60">{dataMode === 'live' ? 'Live Network' : 'Simulation'}</span></div>
-              <div>Theme: <span style={{ color: isAvecZama ? '#FFD200' : '#ffffff' }}>
-                {isAvecZama ? 'Avec Zama (FHE)' : 'Sans Zama'}
+              <div>Theme: <span style={{ color: true ? '#FFD200' : '#ffffff' }}>
+                {true ? 'Avec Zama (FHE)' : 'Sans Zama'}
               </span></div>
             </div>
             <button
@@ -168,7 +165,7 @@ export function GifExporter() {
               disabled={!fgInstance}
               className="w-full py-2 rounded-lg font-mono text-[10px] font-semibold tracking-wider uppercase transition-all disabled:opacity-30"
               style={{
-                background: isAvecZama ? '#FFD200' : '#ffffff',
+                background: true ? '#FFD200' : '#ffffff',
                 color: '#000000',
               }}
             >
@@ -188,7 +185,7 @@ export function GifExporter() {
             className="rounded-xl border p-4 w-64 flex flex-col gap-3"
             style={{
               background: 'rgba(0,0,0,0.94)',
-              borderColor: isAvecZama ? 'rgba(255,210,0,0.35)' : 'rgba(255,255,255,0.15)',
+              borderColor: true ? 'rgba(255,210,0,0.35)' : 'rgba(255,255,255,0.15)',
               backdropFilter: 'blur(16px)',
             }}
           >
@@ -199,7 +196,7 @@ export function GifExporter() {
                 )}
                 {exportState === 'encoding' && (
                   <span className="w-3 h-3 border border-t-transparent rounded-full animate-spin"
-                    style={{ borderColor: isAvecZama ? '#FFD200' : '#ffffff' }}
+                    style={{ borderColor: true ? '#FFD200' : '#ffffff' }}
                   />
                 )}
                 {exportState === 'done' && (
@@ -212,7 +209,7 @@ export function GifExporter() {
                 </span>
               </div>
               {exportState === 'recording' && (
-                <span className="font-mono text-[9px]" style={{ color: isAvecZama ? '#FFD200' : '#aaa' }}>
+                <span className="font-mono text-[9px]" style={{ color: true ? '#FFD200' : '#aaa' }}>
                   {progress}%
                 </span>
               )}
@@ -224,7 +221,7 @@ export function GifExporter() {
                 <div className="w-full h-1 rounded-full bg-white/10 overflow-hidden">
                   <motion.div
                     className="h-full rounded-full"
-                    style={{ background: isAvecZama ? '#FFD200' : '#ffffff' }}
+                    style={{ background: true ? '#FFD200' : '#ffffff' }}
                     animate={{ width: `${progress}%` }}
                     transition={{ duration: 0.1 }}
                   />
@@ -250,11 +247,11 @@ export function GifExporter() {
         disabled={isActive}
         className="w-10 h-10 rounded-full flex items-center justify-center border transition-all"
         animate={{
-          borderColor: isAvecZama ? 'rgba(255,210,0,0.4)' : 'rgba(255,255,255,0.15)',
+          borderColor: true ? 'rgba(255,210,0,0.4)' : 'rgba(255,255,255,0.15)',
           backgroundColor: showPanel && !isActive
-            ? isAvecZama ? 'rgba(255,210,0,0.12)' : 'rgba(255,255,255,0.08)'
+            ? true ? 'rgba(255,210,0,0.12)' : 'rgba(255,255,255,0.08)'
             : 'rgba(0,0,0,0.7)',
-          boxShadow: isAvecZama && showPanel ? '0 0 14px 3px rgba(255,210,0,0.2)' : 'none',
+          boxShadow: showPanel ? '0 0 14px 3px rgba(255,210,0,0.2)' : 'none',
         }}
         title="Export animated GIF"
         whileTap={{ scale: 0.92 }}
@@ -263,13 +260,13 @@ export function GifExporter() {
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path
             d="M6 2H10L11.5 4H14C14.55 4 15 4.45 15 5V12C15 12.55 14.55 13 14 13H2C1.45 13 1 12.55 1 12V5C1 4.45 1.45 4 2 4H4.5L6 2Z"
-            stroke={isAvecZama ? '#FFD200' : 'rgba(255,255,255,0.5)'}
+            stroke={true ? '#FFD200' : 'rgba(255,255,255,0.5)'}
             strokeWidth="1.2"
             strokeLinejoin="round"
           />
           <circle
             cx="8" cy="8.5" r="2.2"
-            stroke={isAvecZama ? '#FFD200' : 'rgba(255,255,255,0.5)'}
+            stroke={true ? '#FFD200' : 'rgba(255,255,255,0.5)'}
             strokeWidth="1.2"
           />
         </svg>

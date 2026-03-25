@@ -20,7 +20,7 @@ export function DataProvenanceBadge() {
   const fetchTime = new Date(fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return (
-    <div className="fixed bottom-6 left-6 z-20 flex flex-col items-start gap-2">
+    <div className="flex flex-col items-start gap-2">
       {/* ── Expanded panel ─────────────────────────────────────────────────── */}
       <AnimatePresence>
         {open && (

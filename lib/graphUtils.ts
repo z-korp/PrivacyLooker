@@ -1,15 +1,20 @@
 import { GraphData, GraphLink, GraphNode, LiveTransaction, WrapperContract } from '@/types/graph';
-import { truncateAddress, formatTokenAmount } from '@/lib/tokenConfig';
 
 /**
- * Builds the force-graph data from live transactions.
+ * Builds the force-graph data for the organic "web of transactions" view.
  *
- * Wrapper contracts are pre-seeded as large, identifiable central hub nodes.
- * Their val is set proportionally to TVS so the most active contracts appear biggest.
+ * Topology
+ * ─────────
+ *   • One hub node per Zama wrapper contract (cUSDT, cUSDC …)
+ *   • One leaf node per unique wallet address seen in transactions
+ *   • One directed edge per on-chain transaction
+ *       Shield   → wallet ──► cTOKEN wrapper
+ *       Unshield → cTOKEN wrapper ──► wallet
  *
- * Multiple transactions between the same (source → target) pair and same eventType
- * are collapsed into a single aggregated edge — keeps the graph readable even with
- * thousands of on-chain events.
+ * No positions are fixed — the physics simulation spreads everything
+ * organically into a web / star cluster around the wrapper hubs.
+ *
+ * Confidential transfers are excluded.
  */
 export function buildGraphData(
   transactions: LiveTransaction[],
@@ -17,142 +22,112 @@ export function buildGraphData(
 ): GraphData {
   const nodeMap = new Map<string, GraphNode>();
 
-  // ── Pre-seed wrapper contract nodes (pinned in a ring) ──────────────────
+  // ── Pre-seed wrapper hub nodes ────────────────────────────────────────────
   const maxTvs = wrapperContracts.reduce((m, w) => Math.max(m, w.tvs), 1);
-  // Sort alphabetically so positions are deterministic regardless of API order
-  const sortedContracts = [...wrapperContracts].sort((a, b) =>
-    a.tokenSymbol.localeCompare(b.tokenSymbol)
-  );
-  const RING_R = 220;
-  const n = sortedContracts.length;
 
-  for (let wi = 0; wi < n; wi++) {
-    const wc = sortedContracts[wi];
-    const key = wc.wrapperAddress.toLowerCase();
-    const angle = (wi / n) * Math.PI * 2;
-    nodeMap.set(key, {
-      id: key,
-      address: wc.wrapperAddress,
-      label: `c${wc.tokenSymbol}`,
-      val: 6 + Math.round((wc.tvs / maxTvs) * 6),
-      txCount: 0,
-      isHub: true,
+  for (const wc of wrapperContracts) {
+    const wKey = wc.wrapperAddress.toLowerCase();
+    nodeMap.set(wKey, {
+      id:               wKey,
+      address:          wc.wrapperAddress,
+      label:            `c${wc.tokenSymbol}`,
+      val:              10 + Math.round((wc.tvs / maxTvs) * 10),  // large hub
+      txCount:          0,
+      isHub:            true,
       isWrapperContract: true,
-      tokenSymbol: wc.tokenSymbol,
-      tvs: wc.tvs,
-      // Fixed 3D position — physics sim will not move these
-      fx: RING_R * Math.cos(angle),
-      fy: RING_R * Math.sin(angle) * 0.55,
-      fz: (wi % 2 === 0 ? 1 : -1) * 35,
+      isBaseToken:      false,
+      tokenSymbol:      wc.tokenSymbol,
+      tvs:              wc.tvs,
     });
   }
 
-  // ── Create / update wallet nodes ─────────────────────────────────────────
-  const getOrCreate = (address: string): GraphNode => {
-    const key = address.toLowerCase();
-    if (!nodeMap.has(key)) {
-      nodeMap.set(key, {
-        id: key,
-        address,
-        label: truncateAddress(address),
-        val: 1,
-        txCount: 0,
-        isHub: false,
-        isWrapperContract: false,
-      });
-    }
-    return nodeMap.get(key)!;
-  };
-
-  // ── Accumulate per-pair buckets before building links ─────────────────────
-  // Key: `${sourceKey}__${targetKey}__${eventType}__${token}`
-  // Including token in the key so USDT Shield and USDC Shield are separate edges
-  interface Bucket {
-    from: GraphNode;
-    to: GraphNode;
-    txHashesArr: string[];
-    blockNumbersArr: number[];
-    amountTotal: number;
-    latestTx: LiveTransaction; // first in list = most recent (txns arrive desc ordered)
-  }
-  const buckets = new Map<string, Bucket>();
-
-  for (const tx of transactions) {
-    const from = getOrCreate(tx.from);
-    const to   = getOrCreate(tx.to);
-
-    from.txCount++;
-    to.txCount++;
-
-    // Don't resize wrapper contracts — their size is TVS-driven
-    if (!from.isWrapperContract) from.val = Math.min(1 + Math.floor(from.txCount / 2), 5);
-    if (!to.isWrapperContract)   to.val   = Math.min(1 + Math.floor(to.txCount / 2), 5);
-
-    const bucketKey = `${from.id}__${to.id}__${tx.eventType}__${tx.token}`;
-    const existing = buckets.get(bucketKey);
-
-    if (existing) {
-      existing.txHashesArr.push(tx.txHash);
-      existing.blockNumbersArr.push(tx.blockNumber);
-      existing.amountTotal += tx.amount;
-    } else {
-      buckets.set(bucketKey, {
-        from,
-        to,
-        txHashesArr: [tx.txHash],
-        blockNumbersArr: [tx.blockNumber],
-        amountTotal: tx.amount,
-        latestTx: tx,
-      });
-    }
-  }
-
-  // ── Build aggregated links ────────────────────────────────────────────────
+  // ── One link + wallet node per transaction ────────────────────────────────
   const links: GraphLink[] = [];
 
-  for (const b of buckets.values()) {
-    const tx = b.latestTx;
-    const count = b.txHashesArr.length;
-    const isConf = tx.eventType === 'confidential';
+  // Track curvature per wallet→wrapper pair (rare repeats get slight spread)
+  const pairCount = new Map<string, number>();
+  const pairIdx   = new Map<string, number>();
 
-    // For aggregated shield/unshield: show total volume across all txns
-    const totalAmountFormatted = isConf
-      ? '🔒 Encrypted'
-      : count === 1
-        ? tx.amountFormatted
-        : formatTokenAmount(b.amountTotal, tx.decimals);
+  // First pass: count per-pair so curvatures can be pre-distributed
+  for (const tx of transactions) {
+    if (tx.eventType === 'confidential') continue;
+    const wKey      = tx.eventType === 'wrap' ? tx.to.toLowerCase() : tx.from.toLowerCase();
+    if (!nodeMap.has(wKey)) continue;
+    const walletKey = tx.eventType === 'wrap' ? tx.from.toLowerCase() : tx.to.toLowerCase();
+    const fromId    = tx.eventType === 'wrap' ? walletKey : wKey;
+    const toId      = tx.eventType === 'wrap' ? wKey      : walletKey;
+    const pairKey   = `${fromId}::${toId}`;
+    pairCount.set(pairKey, (pairCount.get(pairKey) ?? 0) + 1);
+  }
+
+  // Second pass: build nodes + links
+  for (const tx of transactions) {
+    if (tx.eventType === 'confidential') continue;
+
+    const wKey = tx.eventType === 'wrap' ? tx.to.toLowerCase() : tx.from.toLowerCase();
+    if (!nodeMap.has(wKey)) continue;
+
+    const walletAddr = tx.eventType === 'wrap' ? tx.from.toLowerCase() : tx.to.toLowerCase();
+
+    // Create wallet node on first encounter
+    if (!nodeMap.has(walletAddr)) {
+      nodeMap.set(walletAddr, {
+        id:               walletAddr,
+        address:          walletAddr,
+        label:            walletAddr.slice(0, 8) + '…',
+        val:              1.5,
+        txCount:          0,
+        isHub:            false,
+        isWrapperContract: false,
+        isBaseToken:      false,
+      });
+    }
+
+    // Grow the wallet node slightly for repeat actors
+    const walletNode = nodeMap.get(walletAddr)!;
+    walletNode.txCount++;
+    walletNode.val = 1.5 + Math.min(walletNode.txCount * 0.4, 5);
+
+    nodeMap.get(wKey)!.txCount++;
+
+    const fromId  = tx.eventType === 'wrap' ? walletAddr : wKey;
+    const toId    = tx.eventType === 'wrap' ? wKey       : walletAddr;
+    const pairKey = `${fromId}::${toId}`;
+    const idx     = pairIdx.get(pairKey) ?? 0;
+    pairIdx.set(pairKey, idx + 1);
+    const total   = pairCount.get(pairKey) ?? 1;
+
+    // Spread curvature for rare parallel edges (same wallet, multiple txns)
+    const curvature = total === 1 ? 0.1 : 0.05 + (idx / (total - 1)) * 0.45;
 
     links.push({
-      source: b.from.id,
-      target: b.to.id,
-      txHash: b.txHashesArr[0],          // most recent tx hash
-      token: tx.token,
-      tokenBase: tx.token,
-      transformLabel: tx.transformLabel,
-      amount: tx.amount,                  // most recent individual amount
-      amountFormatted: totalAmountFormatted,
-      decimals: tx.decimals,
-      blockNumber: b.blockNumbersArr[0],  // most recent block
-      eventType: tx.eventType,
-      isLive: true,
-      curvature: tx.eventType === 'confidential' ? 0.3 : 0.1,
-      // Aggregation fields
-      aggregatedCount: count,
-      txHashes: b.txHashesArr,
-      blockNumbers: b.blockNumbersArr,
-      totalAmount: b.amountTotal,
+      source:          fromId,
+      target:          toId,
+      txHash:          tx.txHash,
+      token:           tx.token,
+      tokenBase:       tx.token,
+      transformLabel:  tx.transformLabel,
+      amount:          tx.amount,
+      amountFormatted: tx.amountFormatted,
+      decimals:        tx.decimals,
+      blockNumber:     tx.blockNumber,
+      eventType:       tx.eventType,
+      isLive:          true,
+      curvature,
+      aggregatedCount: 1,
+      txHashes:        [tx.txHash],
+      blockNumbers:    [tx.blockNumber],
+      totalAmount:     tx.amount,
     });
   }
 
-  // ── Mark high-degree wallet nodes as generic hubs ─────────────────────────
-  const walletNodes = Array.from(nodeMap.values()).filter((node) => !node.isWrapperContract);
-  const avgDegree = walletNodes.length > 0 ? (links.length * 2) / walletNodes.length : 0;
-  walletNodes.forEach((node) => {
-    if (node.txCount > avgDegree * 2) {
-      node.isHub = true;
-      node.val = Math.min(node.val + 1, 5);
-    }
-  });
+  const nodes = Array.from(nodeMap.values()).filter((n) =>
+    // Keep wrapper hubs even if they have no links in this time-slice
+    n.isWrapperContract || links.some((l) =>
+      (typeof l.source === 'string' ? l.source : l.source.id) === n.id ||
+      (typeof l.target === 'string' ? l.target : l.target.id) === n.id
+    )
+  );
 
-  return { nodes: Array.from(nodeMap.values()), links };
+  return { nodes, links };
 }

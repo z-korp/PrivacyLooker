@@ -4,272 +4,252 @@ import { useRef, useCallback, useEffect, useMemo } from 'react';
 import ForceGraph3D from 'react-force-graph-3d';
 import * as THREE from 'three';
 import SpriteText from 'three-spritetext';
-// forceCollide is ESM-only — must be a top-level import (no require)
 import { forceCollide } from 'd3-force-3d';
-import { GraphNode, GraphLink, PrivacyMode } from '@/types/graph';
+import { GraphNode, GraphLink } from '@/types/graph';
+import { getExtrudedLogoGeometry, TOKEN_COLOR } from '@/lib/tokenLogos';
 import { useTransactions } from '@/hooks/useTransactions';
 import { useAppStore } from '@/store/appStore';
-import { toConfidential } from '@/lib/tokenConfig';
 
 interface Props {
   width: number;
   height: number;
 }
 
-// ── Color palette (edge type × privacy mode) ──────────────────────────────────
-const EDGE_PALETTE = {
-  'sans-zama': {
-    wrap:         { link: '#22c55e', particle: '#4ade80' },
-    unwrap:       { link: '#ef4444', particle: '#f87171' },
-    confidential: { link: '#a78bfa', particle: '#c4b5fd' },
-    transfer:     { link: '#444444', particle: '#666666' },
-  },
-  'avec-zama': {
-    wrap:         { link: '#86efac', particle: '#bbf7d0' },
-    unwrap:       { link: '#fca5a5', particle: '#fecaca' },
-    confidential: { link: '#c084fc', particle: '#e9d5ff' },
-    transfer:     { link: '#FFD200', particle: '#FFE566' },
-  },
+// ── Fixed palette — always FHE / avec-zama ─────────────────────────────────
+const EDGE_COLORS = {
+  wrap:     { link: '#4ade80', particle: '#86efac' },   // Shield: green
+  unwrap:   { link: '#f87171', particle: '#fca5a5' },   // Unshield: red
+  transfer: { link: '#FFD200', particle: '#FFE566' },
 } as const;
 
 const THEME = {
-  'sans-zama': {
-    background: '#000000',
-    walletColor:   '#ffffff',
-    walletHubColor:'#aaaaaa',
-    ringColor:     '#ffffff',
-    glowColor:     0xffffff,
-    labelColor:    '#ffffff',
-    particleCount: 3,
-    particleWidth: 1.8,
-    glowEnabled:   false,
-  },
-  'avec-zama': {
-    background: '#000000',
-    walletColor:   '#FFD200',
-    walletHubColor:'#ffe566',
-    ringColor:     '#FFD200',
-    glowColor:     0xffd200,
-    labelColor:    '#FFD200',
-    particleCount: 4,
-    particleWidth: 3,
-    glowEnabled:   true,
-  },
+  background:     '#000000',
+  walletColor:    '#FFD200',
+  walletHubColor: '#ffe566',
+  ringColor:      '#FFD200',
+  glowColor:      0xffd200,
+  labelColor:     '#FFD200',
+  particleCount:  1,   // 1 per link — many individual links now
+  particleWidth:  1.8,
 } as const;
 
-// ── THREE.js node factory ─────────────────────────────────────────────────────
-function buildNodeObject(node: GraphNode, mode: PrivacyMode): THREE.Object3D {
-  const theme = THEME[mode];
+// ── Pre-allocated THREE materials for node reuse ───────────────────────────
+const MAT_WALLET     = new THREE.MeshBasicMaterial({ color: THEME.walletColor });
+const MAT_HUB        = new THREE.MeshBasicMaterial({ color: THEME.walletHubColor });
+const MAT_GLOW_INNER = new THREE.MeshBasicMaterial({ color: THEME.glowColor, transparent: true, opacity: 0.20, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false });
+const MAT_GLOW_OUTER = new THREE.MeshBasicMaterial({ color: THEME.glowColor, transparent: true, opacity: 0.05, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false });
+
+// Per-token phong materials (lit → depth shading on extruded faces)
+const _logoMatCache = new Map<string, THREE.MeshPhongMaterial>();
+function getLogoMat(symbol: string): THREE.MeshPhongMaterial {
+  if (_logoMatCache.has(symbol)) return _logoMatCache.get(symbol)!;
+  const col  = TOKEN_COLOR[symbol] ?? THEME.glowColor;
+  const mat  = new THREE.MeshPhongMaterial({
+    color:     col,
+    emissive:  new THREE.Color(col).multiplyScalar(0.18),
+    shininess: 80,
+    specular:  new THREE.Color(0x888888),
+  });
+  _logoMatCache.set(symbol, mat);
+  return mat;
+}
+
+// ── THREE.js node factory (materials reused, only geometries allocated) ────
+function buildNodeObject(node: GraphNode): THREE.Object3D {
   const group = new THREE.Group();
 
   if (node.isWrapperContract) {
-    // Torus (ring) — visually distinct from wallet spheres
-    const outerR = 6 + node.val * 0.55;
-    const tubeR  = outerR * 0.26;
+    const sym    = node.tokenSymbol ?? '';
+    const outerR = 6 + node.val * 0.55;     // 3D world radius (~9-13 units)
+    const depth  = outerR * 0.7;            // extrusion depth proportional to size
 
-    const geo = new THREE.TorusGeometry(outerR, tubeR, 20, 64);
-    const mat = new THREE.MeshBasicMaterial({ color: theme.ringColor });
-    const torus = new THREE.Mesh(geo, mat);
-    torus.rotation.x = Math.PI / 3.5;
-    group.add(torus);
+    // ── Extruded token logo ──────────────────────────────────────────────────
+    // Shapes live in ±50 space — scale them down to fit our outerR
+    const logoScale = outerR / 50;
+    const geom = getExtrudedLogoGeometry(sym, depth);
+    const mesh = new THREE.Mesh(geom, getLogoMat(sym));
+    mesh.scale.set(logoScale, logoScale, 1);
+    group.add(mesh);
 
-    if (theme.glowEnabled) {
-      const gGeo = new THREE.TorusGeometry(outerR * 1.5, tubeR * 1.2, 14, 40);
-      const gMat = new THREE.MeshBasicMaterial({
-        color: theme.glowColor, transparent: true, opacity: 0.10,
-        blending: THREE.AdditiveBlending, depthWrite: false,
-      });
-      const gTorus = new THREE.Mesh(gGeo, gMat);
-      gTorus.rotation.x = Math.PI / 3.5;
-      group.add(gTorus);
-    }
+    // Soft volumetric glow behind the logo
+    group.add(new THREE.Mesh(
+      new THREE.SphereGeometry(outerR * 1.55, 10, 10),
+      MAT_GLOW_OUTER,
+    ));
 
-    // Always-visible token label
-    const label = new SpriteText(`c${node.tokenSymbol ?? '?'}`);
-    label.color        = theme.labelColor;
-    label.textHeight   = outerR * 0.52;
-    label.fontFace     = 'JetBrains Mono, monospace';
-    label.fontWeight   = 'bold';
+    // Label
+    const label = new SpriteText(`c${sym || '?'}`);
+    label.color           = THEME.labelColor;
+    label.textHeight      = outerR * 0.52;
+    label.fontFace        = 'JetBrains Mono, monospace';
+    label.fontWeight      = 'bold';
     label.backgroundColor = 'rgba(0,0,0,0.65)';
-    label.padding      = 2;
-    label.borderRadius = 3;
-    label.position.set(0, outerR + tubeR + 4, 0);
+    label.padding         = 2;
+    label.borderRadius    = 3;
+    label.position.set(0, outerR + depth * 0.5 + 5, 0);
     group.add(label);
 
     return group;
   }
 
-  // Wallet node — sphere
   const radius = 2 + node.val * 0.65;
-  const color  = node.isHub ? theme.walletHubColor : theme.walletColor;
-  const sphere = new THREE.Mesh(
-    new THREE.SphereGeometry(radius, 14, 14),
-    new THREE.MeshBasicMaterial({ color })
-  );
-  group.add(sphere);
-
-  if (theme.glowEnabled) {
-    const addGlow = (r: number, op: number) => {
-      group.add(new THREE.Mesh(
-        new THREE.SphereGeometry(r, 12, 12),
-        new THREE.MeshBasicMaterial({
-          color: 0xffd200, transparent: true, opacity: op,
-          side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false,
-        })
-      ));
-    };
-    addGlow(radius * 1.6, 0.22);
-    addGlow(radius * 2.6, 0.06);
-  }
+  const mat    = node.isHub ? MAT_HUB : MAT_WALLET;
+  group.add(new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 12), mat));
+  group.add(new THREE.Mesh(new THREE.SphereGeometry(radius * 1.6, 10, 10), MAT_GLOW_INNER));
+  group.add(new THREE.Mesh(new THREE.SphereGeometry(radius * 2.4, 8,  8),  MAT_GLOW_OUTER));
 
   return group;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-const palette = (link: GraphLink, mode: PrivacyMode) => {
-  const p = EDGE_PALETTE[mode];
-  return p[link.eventType as keyof typeof p] ?? p.transfer;
-};
+// ── Helpers ────────────────────────────────────────────────────────────────
+const edgeColors = (link: GraphLink) =>
+  EDGE_COLORS[link.eventType as keyof typeof EDGE_COLORS] ?? EDGE_COLORS.transfer;
 
 function eventLabel(et: string) {
   if (et === 'wrap')         return '⬆ Shield';
   if (et === 'unwrap')       return '⬇ Unshield';
-  if (et === 'confidential') return '🔒 Confidential Transfer';
+  if (et === 'confidential') return '🔒 Confidential';
   return 'Transfer';
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// ── Main component ─────────────────────────────────────────────────────────
 export default function ForceGraph3DWrapper({ width, height }: Props) {
-  const privacyMode     = useAppStore((s) => s.privacyMode);
   const setSelectedNode = useAppStore((s) => s.setSelectedNode);
   const setSelectedLink = useAppStore((s) => s.setSelectedLink);
   const setFgInstance   = useAppStore((s) => s.setFgInstance);
 
   const { graphData } = useTransactions();
   const fgRef       = useRef<any>(null);
-  const hasZoomed   = useRef(false);   // zoom-to-fit only on first load
-  const theme       = THEME[privacyMode];
+  const hasZoomed   = useRef(false);
 
-  // Register instance + enable auto-rotation once physics first settles
+  // Register instance, lights, auto-rotate, and zoom-to-fit once physics settle
   const onEngineStop = useCallback(() => {
     const fg = fgRef.current;
     if (!fg) return;
     setFgInstance(fg);
-    // Gentle ambient rotation — makes the 3D space feel alive
+
+    // Ensure the scene has enough light for MeshPhongMaterial to show depth
+    const scene = fg.scene();
+    if (scene && !scene.userData.__lightsAdded) {
+      scene.userData.__lightsAdded = true;
+      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+      const dir1    = new THREE.DirectionalLight(0xffffff, 1.0);
+      dir1.position.set(200, 300, 200);
+      const dir2    = new THREE.DirectionalLight(0x8888ff, 0.4);
+      dir2.position.set(-200, -100, -200);
+      scene.add(ambient, dir1, dir2);
+    }
+
     const controls = fg.controls();
     if (controls) {
       controls.autoRotate      = true;
       controls.autoRotateSpeed = 0.35;
     }
+    // Zoom to fit the whole graph the first time physics settle after new data
+    if (!hasZoomed.current) {
+      hasZoomed.current = true;
+      fg.zoomToFit(900, 60);
+    }
   }, [setFgInstance]);
 
   useEffect(() => () => setFgInstance(null), [setFgInstance]);
 
-  // ── d3 force customization ────────────────────────────────────────────────
+  // ── d3 force setup — delayed so the simulation is guaranteed to exist ─────
   useEffect(() => {
-    const fg = fgRef.current;
-    if (!fg) return;
+    if (graphData.nodes.length === 0) return;
 
-    // Moderate repulsion — strong enough to separate nodes, not so strong it oscillates
-    fg.d3Force('charge')?.strength(-260);
+    // Use a short timeout so ForceGraph3D has time to create the simulation
+    // before we call d3Force() on it (avoids "Cannot read .tick of undefined")
+    const t = setTimeout(() => {
+      const fg = fgRef.current;
+      if (!fg) return;
 
-    // Longer links for shield/unshield (wallet ↔ wrapper), shorter for confidential
-    fg.d3Force('link')
-      ?.distance((link: GraphLink) => link.eventType === 'confidential' ? 70 : 130)
-      .strength((link: GraphLink) => link.eventType === 'confidential' ? 0.2 : 0.6);
+      try {
+        // Strong repulsion spreads wallet leaf nodes apart → organic web feel
+        fg.d3Force('charge')?.strength((n: GraphNode) =>
+          n.isWrapperContract ? -800 : -120
+        );
+        fg.d3Force('link')
+          ?.distance((l: GraphLink) => l.eventType === 'wrap' ? 90 : 90)
+          .strength(0.6);
+        fg.d3Force('collision', forceCollide((n: GraphNode) =>
+          n.isWrapperContract ? 30 + n.val * 1.5 : 6 + n.val
+        ).strength(0.6));
+        // No centering force — let clusters float freely
+        fg.d3Force('center', null);
+        fg.d3ReheatSimulation();
+      } catch {
+        // Simulation not ready yet — will settle naturally
+      }
+    }, 80);
 
-    fg.d3Force('collision', forceCollide((n: GraphNode) => {
-      if (n.isWrapperContract) return 28 + n.val * 2;
-      return 9 + n.val * 1.4;
-    }).strength(0.8));
-
-    fg.d3Force('center', null);
-    fg.d3ReheatSimulation();
+    return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphData.nodes.length, graphData.links.length]);
 
-  // Auto-fit camera — once on first load only, so live refreshes don't jolt the view
+  // Reset zoom flag when the dataset changes (week / token filter applied)
   useEffect(() => {
-    if (!fgRef.current || graphData.nodes.length === 0 || hasZoomed.current) return;
-    hasZoomed.current = true;
-    const t = setTimeout(() => fgRef.current?.zoomToFit(1400, 120), 1800);
-    return () => clearTimeout(t);
-  }, [graphData.nodes.length]);
+    if (graphData.nodes.length > 0) {
+      hasZoomed.current = false;
+    }
+  }, [graphData]);
 
-  // Apply "avec zama" token name prefix
-  const displayData = useMemo(() => {
-    if (privacyMode === 'sans-zama') return graphData;
-    return {
-      nodes: graphData.nodes,
-      links: graphData.links.map((l) => ({ ...l, token: toConfidential(l.tokenBase) })),
-    };
-  }, [graphData, privacyMode]);
+  // Token labels are already the 'avec-zama' prefixed form in graphData
+  const displayData = useMemo(() => graphData, [graphData]);
 
-  // ── Node THREE object ──────────────────────────────────────────────────────
+  // ── Callbacks — all stable, no deps on changing data ──────────────────────
   const nodeThreeObject = useCallback(
-    (node: object) => buildNodeObject(node as GraphNode, privacyMode),
-    [privacyMode]
+    (node: object) => buildNodeObject(node as GraphNode),
+    [] // never changes — mode is constant
   );
 
-  // ── Node tooltip ───────────────────────────────────────────────────────────
   const nodeLabel = useCallback((node: object) => {
     const n = node as GraphNode;
     const isW = n.isWrapperContract;
     return `
-      <div style="background:rgba(0,0,0,0.92);border:1px solid ${isW ? '#FFD200' : '#333'};border-radius:6px;padding:8px 12px;font-family:monospace;font-size:11px;color:#fff;max-width:230px;">
+      <div style="background:rgba(0,0,0,0.92);border:1px solid ${isW ? '#FFD200' : '#2a2a2a'};border-radius:6px;padding:8px 12px;font-family:monospace;font-size:11px;color:#fff;max-width:240px;">
         <div style="color:${isW ? '#FFD200' : '#aaa'};font-weight:bold;margin-bottom:4px;">${isW ? `c${n.tokenSymbol} Wrapper` : 'Wallet'}</div>
-        <div style="word-break:break-all;color:#ccc;font-size:9px;">${n.address}</div>
-        <div style="margin-top:5px;color:#666;font-size:9px;">Txns: <span style="color:#fff;">${n.txCount}</span></div>
-        ${isW ? '<div style="margin-top:3px;color:#FFD200;font-size:9px;">● Zama FHE Contract</div>' : ''}
+        <div style="word-break:break-all;color:#888;font-size:9px;">${n.address}</div>
+        <div style="margin-top:5px;display:flex;gap:12px;">
+          <div style="color:#444;font-size:9px;">Txns: <span style="color:#fff;">${n.txCount}</span></div>
+        </div>
+        ${isW ? '<div style="margin-top:4px;color:#FFD200;font-size:9px;">● Zama FHE Contract</div>' : ''}
       </div>`;
   }, []);
 
-  // ── Link tooltip ───────────────────────────────────────────────────────────
   const linkLabel = useCallback((link: object) => {
     const l = link as GraphLink;
     const isConf = l.eventType === 'confidential';
-    const { link: ec } = palette(l, privacyMode);
-    const from  = typeof l.source === 'string' ? l.source : l.source.address;
-    const to    = typeof l.target === 'string' ? l.target : l.target.address;
+    const { link: ec } = edgeColors(l);
+    const from = typeof l.source === 'string' ? l.source : l.source.address;
+    const to   = typeof l.target === 'string' ? l.target : l.target.address;
 
     const amountHtml = isConf
       ? `<span style="color:#c084fc;">🔒 FHE Encrypted</span>`
-      : privacyMode === 'avec-zama'
-        ? `<span style="color:#FFD200;">🔒 Encrypted</span>`
-        : `${l.amountFormatted} ${l.tokenBase}`;
+      : `<span style="color:#FFD200;">🔒 Encrypted</span>`;
 
     return `
       <div style="background:rgba(0,0,0,0.94);border:1px solid ${ec}44;border-radius:6px;padding:8px 12px;font-family:monospace;font-size:11px;color:#fff;max-width:260px;">
-        <div style="color:${ec};font-weight:bold;font-size:13px;margin-bottom:2px;letter-spacing:0.02em;">${l.transformLabel}</div>
+        <div style="color:${ec};font-weight:bold;font-size:13px;margin-bottom:2px;">${l.transformLabel}</div>
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
           <span style="color:${ec};font-size:9px;opacity:0.7;">${eventLabel(l.eventType)}</span>
-          ${l.aggregatedCount > 1 ? `<span style="color:${ec};font-size:8px;padding:1px 5px;border:1px solid ${ec}44;border-radius:3px;">${l.aggregatedCount} txns</span>` : ''}
+          ${(l.aggregatedCount ?? 1) > 1 ? `<span style="color:${ec};font-size:8px;padding:1px 5px;border:1px solid ${ec}44;border-radius:3px;">${l.aggregatedCount} txns</span>` : ''}
         </div>
-        <div style="margin-bottom:4px;">${l.aggregatedCount > 1 ? 'Total: ' : 'Amount: '}${amountHtml}</div>
+        <div style="margin-bottom:4px;">${(l.aggregatedCount ?? 1) > 1 ? 'Total: ' : 'Amount: '}${amountHtml}</div>
         <div style="color:#444;font-size:9px;">${from.slice(0,12)}… → ${to.slice(0,12)}…</div>
         ${l.isLive ? `<div style="margin-top:5px;color:#4ade80;font-size:9px;">● Live · click to open Etherscan</div>` : ''}
       </div>`;
-  }, [privacyMode]);
+  }, []);
 
-  // ── Per-link style callbacks ───────────────────────────────────────────────
-  const linkColor     = useCallback((l: object) => palette(l as GraphLink, privacyMode).link,     [privacyMode]);
-  const particleColor = useCallback((l: object) => palette(l as GraphLink, privacyMode).particle, [privacyMode]);
+  const linkColor     = useCallback((l: object) => edgeColors(l as GraphLink).link,     []);
+  const particleColor = useCallback((l: object) => edgeColors(l as GraphLink).particle, []);
 
-  const linkWidth = useCallback((l: object) => {
-    const link = l as GraphLink;
-    const base = privacyMode === 'avec-zama' ? 0.75 : 0.45;
-    if (link.eventType === 'confidential') return base * 0.8;
-    // Log-scale on aggregated count so heavily-used pairs are visually thicker
-    const countBoost = Math.log2((link.aggregatedCount ?? 1) + 1) * 0.55;
-    return Math.min(base + countBoost, base * 6);
-  }, [privacyMode]);
+  const linkWidth = useCallback((_l: object) => 0.5, []);
 
   const linkCurvature = useCallback(
-    (l: object) => (l as GraphLink).curvature ?? 0.1,
-    []
+    (l: object) => (l as GraphLink).curvature ?? 0.1, []
   );
 
-  // ── Interaction ────────────────────────────────────────────────────────────
   const onNodeClick = useCallback((node: object) => {
     const n = node as GraphNode & { x?: number; y?: number; z?: number };
     setSelectedNode(n);
@@ -282,7 +262,7 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
         1200
       );
     }
-  }, [setSelectedNode]);  // fgRef is a stable ref, no need to list it
+  }, [setSelectedNode]);
 
   const onLinkClick = useCallback((link: object) => {
     const l = link as GraphLink;
@@ -298,6 +278,19 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
   }, [setSelectedNode, setSelectedLink]);
 
   if (width === 0 || height === 0) return null;
+  // Don't mount the WebGL renderer until we have real data —
+  // an empty simulation causes "Cannot read .tick of undefined"
+  if (graphData.nodes.length === 0) return (
+    <div className="absolute inset-0 flex items-center justify-center">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin"
+          style={{ borderColor: '#FFD200', borderTopColor: 'transparent' }} />
+        <span className="font-mono text-[10px] tracking-widest uppercase" style={{ color: '#FFD200' }}>
+          Loading on-chain data…
+        </span>
+      </div>
+    </div>
+  );
 
   return (
     <ForceGraph3D
@@ -305,7 +298,7 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
       graphData={displayData as any}
       width={width}
       height={height}
-      backgroundColor={theme.background}
+      backgroundColor={THEME.background}
       // Nodes
       nodeId="id"
       nodeVal="val"
@@ -318,23 +311,23 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
       linkTarget="target"
       linkColor={linkColor}
       linkWidth={linkWidth}
-      linkOpacity={0.7}
+      linkOpacity={0.85}
       linkCurvature={linkCurvature}
       linkLabel={linkLabel}
       // Particles
-      linkDirectionalParticles={theme.particleCount}
+      linkDirectionalParticles={THEME.particleCount}
       linkDirectionalParticleSpeed={0.005}
       linkDirectionalParticleColor={particleColor}
-      linkDirectionalParticleWidth={theme.particleWidth}
+      linkDirectionalParticleWidth={THEME.particleWidth}
       // Interaction
       onNodeClick={onNodeClick}
       onLinkClick={onLinkClick}
       onBackgroundClick={onBackgroundClick}
       onEngineStop={onEngineStop}
-      // Physics — slow decay + strong damping = nodes glide smoothly into place
-      d3AlphaDecay={0.007}
-      d3VelocityDecay={0.38}
-      cooldownTicks={600}
+      // Physics — slow decay = smooth glide into place
+      d3AlphaDecay={0.015}
+      d3VelocityDecay={0.3}
+      cooldownTicks={300}
       // preserveDrawingBuffer required for GIF canvas capture
       rendererConfig={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
     />

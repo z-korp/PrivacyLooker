@@ -103,12 +103,29 @@ async function fetchWrapperContracts(): Promise<WrapperContract[]> {
   }));
 }
 
-async function fetchShieldEvents(limit = 300): Promise<LiveTransaction[]> {
-  const rows = await sb<WrapperEvent>('wrapper_events', {
+async function fetchShieldEvents(
+  limit = 300,
+  fromTs?: string,
+  toTs?: string,
+  tokenSymbol?: string,
+): Promise<LiveTransaction[]> {
+  const q = new URLSearchParams({
+    select: '*',
     order: 'block_number.desc',
     limit: String(limit),
     status: 'eq.success',
   });
+  if (fromTs)      q.append('timestamp',    `gte.${fromTs}`);
+  if (toTs)        q.append('timestamp',    `lte.${toTs}`);
+  if (tokenSymbol && tokenSymbol !== 'ALL') q.append('token_symbol', `eq.${tokenSymbol}`);
+
+  const url = `${SUPABASE_URL}/rest/v1/wrapper_events?${q}`;
+  const res = await fetch(url, { headers: HEADERS, next: { revalidate: 30 } });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Supabase wrapper_events ${res.status}: ${body.slice(0, 120)}`);
+  }
+  const rows: WrapperEvent[] = await res.json();
 
   return rows
     .filter((e) => {
@@ -149,12 +166,19 @@ async function fetchShieldEvents(limit = 300): Promise<LiveTransaction[]> {
     });
 }
 
-async function fetchConfidentialTransfers(limit = 100): Promise<LiveTransaction[]> {
-  const rows = await sb<ConfidentialTransfer>('confidential_transfers', {
+async function fetchConfidentialTransfers(
+  limit = 100,
+  tokenSymbol?: string,
+): Promise<LiveTransaction[]> {
+  const params: Record<string, string> = {
     order: 'block_number.desc',
     limit: String(limit),
     from_address: `neq.${ZERO_ADDR}`,
-  });
+  };
+  if (tokenSymbol && tokenSymbol !== 'ALL') {
+    params['token_symbol'] = `eq.${tokenSymbol}`;
+  }
+  const rows = await sb<ConfidentialTransfer>('confidential_transfers', params);
 
   return rows
     .filter(
@@ -181,18 +205,30 @@ async function fetchConfidentialTransfers(limit = 100): Promise<LiveTransaction[
 
 // ── Route handler ────────────────────────────────────────────────────────────
 
-export async function GET() {
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const fromTs    = searchParams.get('from')  ?? undefined;
+  const toTs      = searchParams.get('to')    ?? undefined;
+  const tokenFilter = searchParams.get('token') ?? undefined; // 'USDT', 'USDC', etc.
+  // When a week is selected, fetch more events (a single week can have 1K+ USDT txns)
+  const shieldLimit = fromTs ? 1000 : 300;
+
   try {
-    const [wrapperContracts, shieldTxs, confidentialTxs, totalWrap, totalConf] =
+    const [wrapperContracts, shieldTxs, totalWrap, totalConf] =
       await Promise.all([
         fetchWrapperContracts(),
-        fetchShieldEvents(300),
-        fetchConfidentialTransfers(100),
+        fetchShieldEvents(shieldLimit, fromTs, toTs, tokenFilter),
         sbCount('wrapper_events', { status: 'eq.success' }),
         sbCount('confidential_transfers', { from_address: `neq.${ZERO_ADDR}` }),
       ]);
 
-    const allTxs = [...shieldTxs, ...confidentialTxs];
+    const allTxs = shieldTxs;
+
+    // When a token filter is active, only expose that wrapper contract node
+    // so the graph doesn't show idle rings for other tokens
+    const visibleContracts = tokenFilter && tokenFilter !== 'ALL'
+      ? wrapperContracts.filter((w) => w.tokenSymbol === tokenFilter)
+      : wrapperContracts;
 
     // Block range across all fetched transactions
     const blockNumbers = allTxs.map((t) => t.blockNumber).filter(Boolean);
@@ -213,7 +249,7 @@ export async function GET() {
     return NextResponse.json(
       {
         transactions: allTxs,
-        wrapperContracts,
+        wrapperContracts: visibleContracts,
         provenance,
         fetchedAt: provenance.fetchedAt,
       },

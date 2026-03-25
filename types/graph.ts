@@ -1,4 +1,5 @@
-export type PrivacyMode = 'sans-zama' | 'avec-zama';
+// PrivacyMode is always 'avec-zama' now — re-exported from store for backward compat
+export type PrivacyMode = 'avec-zama';
 export type DataMode = 'simulation' | 'live';
 
 /**
@@ -18,7 +19,8 @@ export interface GraphNode {
   txCount: number;
   isHub: boolean;           // high-degree generic hub
   isWrapperContract: boolean; // true = Zama cToken wrapper contract
-  tokenSymbol?: string;     // only for wrapper contracts: "USDT", "WETH", etc.
+  isBaseToken?: boolean;    // true = plain ERC-20 counterpart of a wrapper (e.g. USDT node)
+  tokenSymbol?: string;     // for wrapper + base-token nodes
   tvs?: number;             // Total Value Shielded in raw units (wrapper contracts only)
   /** Fixed 3D position — prevents the physics sim from moving these nodes */
   fx?: number;
@@ -80,6 +82,21 @@ export interface LiveTransaction {
   decimals: number;
   blockNumber: number;
   eventType: EventType;
+}
+
+/** One week's aggregated shield/unshield counts, broken down by token */
+export interface TimelineWeek {
+  weekStart: number;   // Unix timestamp of Monday 00:00 UTC
+  weekEnd: number;     // Unix timestamp of Sunday 23:59:59 UTC
+  weekLabel: string;   // "Dec 29", "Jan 5", etc.
+  tokens: Record<string, { wrap: number; unwrap: number }>;
+  total: { wrap: number; unwrap: number };
+}
+
+export interface TimelineData {
+  weeks: TimelineWeek[];
+  tokens: string[];    // distinct token symbols present in data
+  totalFetched: number;
 }
 
 /** On-chain data provenance — proves the live graph is real, not mocked */
