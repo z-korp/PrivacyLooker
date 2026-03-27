@@ -221,9 +221,10 @@ export function TimelineBar() {
         animate={{ y: 0, opacity: 1 }}
         transition={{ type: 'spring', stiffness: 320, damping: 30, delay: 0.3 }}
         style={{
-          background: 'rgba(0,0,0,0.88)',
-          backdropFilter: 'blur(16px)',
-          borderTop: '1px solid rgba(255,255,255,0.07)',
+          background: 'rgba(10,10,10,0.6)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+          borderTop: '1px solid rgba(255,255,255,0.08)',
         }}
       >
         <div className="flex items-stretch" style={{ height: '128px' }}>

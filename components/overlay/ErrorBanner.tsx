@@ -16,7 +16,7 @@ export function ErrorBanner() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
         >
-          <div className="flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 backdrop-blur-md">
+          <div className="flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-500/20 noise-texture" style={{ background: 'rgba(10,10,10,0.6)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
             <span className="text-amber-400 text-xs">⚠</span>
             <p className="font-mono text-[10px] text-amber-400/80">{error}</p>
           </div>

@@ -11,26 +11,26 @@ interface GlowBadgeProps {
 const variantStyles = {
   yellow: {
     color: '#FFD200',
-    borderColor: 'rgba(255,210,0,0.5)',
-    bg: 'rgba(255,210,0,0.08)',
-    shadow: '0 0 12px 3px rgba(255,210,0,0.5)',
+    borderColor: 'rgba(255,210,0,0.3)',
+    bg: 'rgba(255,210,0,0.06)',
+    shadow: '0 0 8px 2px rgba(255,210,0,0.25)',
   },
   white: {
     color: '#ffffff',
-    borderColor: 'rgba(255,255,255,0.3)',
-    bg: 'rgba(255,255,255,0.05)',
-    shadow: '0 0 10px 2px rgba(255,255,255,0.3)',
+    borderColor: 'rgba(255,255,255,0.2)',
+    bg: 'rgba(255,255,255,0.04)',
+    shadow: '0 0 6px 2px rgba(255,255,255,0.15)',
   },
   green: {
     color: '#4ade80',
-    borderColor: 'rgba(74,222,128,0.4)',
-    bg: 'rgba(74,222,128,0.07)',
-    shadow: '0 0 10px 2px rgba(74,222,128,0.4)',
+    borderColor: 'rgba(74,222,128,0.25)',
+    bg: 'rgba(74,222,128,0.05)',
+    shadow: '0 0 6px 2px rgba(74,222,128,0.2)',
   },
   red: {
     color: '#f87171',
-    borderColor: 'rgba(248,113,113,0.4)',
-    bg: 'rgba(248,113,113,0.07)',
+    borderColor: 'rgba(248,113,113,0.25)',
+    bg: 'rgba(248,113,113,0.05)',
     shadow: 'none',
   },
 };

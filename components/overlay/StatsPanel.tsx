@@ -40,7 +40,7 @@ function StatRow({
 }) {
   return (
     <div className="flex items-baseline justify-between gap-2">
-      <span className="font-mono text-[9px] text-white/30 uppercase tracking-wider flex-shrink-0">{label}</span>
+      <span className="font-mono text-[8px] text-white/25 uppercase tracking-widest flex-shrink-0">{label}</span>
       <div className="text-right">
         <motion.span
           key={String(value)}
@@ -87,7 +87,7 @@ export function StatsPanel() {
     <div className="flex flex-col gap-2">
       {/* Header */}
       <div className="flex items-center gap-2">
-        <span className="font-mono text-[9px] text-white/20 tracking-widest uppercase">
+        <span className="font-mono text-[8px] text-white/20 tracking-widest uppercase font-medium">
           Live Stats
         </span>
         <AnimatePresence>
@@ -107,8 +107,7 @@ export function StatsPanel() {
 
       {/* Stats grid */}
       <div
-        className="flex flex-col gap-1.5 rounded-lg p-2.5"
-        style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}
+        className="flex flex-col gap-1.5 rounded-lg p-2.5 glass-highlight"
       >
         <StatRow
           label="Shield"

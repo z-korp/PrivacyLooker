@@ -1,27 +1,42 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { motion } from 'framer-motion';
-import { GraphCanvas }          from '@/components/graph/GraphCanvas';
-import { InfoPanel }             from '@/components/overlay/InfoPanel';
-import { ErrorBanner }           from '@/components/overlay/ErrorBanner';
-import { GifExporter }           from '@/components/overlay/GifExporter';
-import { DataProvenanceBadge }   from '@/components/overlay/DataProvenanceBadge';
-import { TimelineBar }           from '@/components/overlay/TimelineBar';
-import { PrivacyToggle }         from '@/components/overlay/PrivacyToggle';
-import { DataModeSwitch }        from '@/components/overlay/DataModeSwitch';
-import { Legend }                from '@/components/overlay/Legend';
-import { StatsPanel }            from '@/components/overlay/StatsPanel';
+import { InfoPanel }           from '@/components/overlay/InfoPanel';
+import { ErrorBanner }         from '@/components/overlay/ErrorBanner';
+import { GifExporter }         from '@/components/overlay/GifExporter';
+import { DataProvenanceBadge } from '@/components/overlay/DataProvenanceBadge';
+import { TimelineBar }         from '@/components/overlay/TimelineBar';
+import { PrivacyToggle }       from '@/components/overlay/PrivacyToggle';
+import { DataModeSwitch }      from '@/components/overlay/DataModeSwitch';
+import { Legend }               from '@/components/overlay/Legend';
+import { StatsPanel }           from '@/components/overlay/StatsPanel';
+
+const HomeGPUCanvas = dynamic(() => import('@/components/homegpu/HomeGPUCanvas'), {
+  ssr: false,
+  loading: () => (
+    <div className="fixed inset-0 flex items-center justify-center bg-black">
+      <div className="flex flex-col items-center gap-4">
+        <div className="w-12 h-12 border-2 border-t-transparent rounded-full animate-spin"
+          style={{ borderColor: '#FFD200', borderTopColor: 'transparent' }} />
+        <p className="font-mono text-xs text-white/40 tracking-widest uppercase">
+          Initialising WebGPU engine&hellip;
+        </p>
+      </div>
+    </div>
+  ),
+});
 
 const fadeUp = {
   initial: { opacity: 0, y: 14 },
   animate: { opacity: 1, y: 0 },
 };
 
-export default function Home() {
+export default function HomeGPU() {
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-black">
-      {/* 3D Force Graph */}
-      <GraphCanvas />
+      {/* WebGPU 3D Scene */}
+      <HomeGPUCanvas />
 
       {/* ── Top-left panel: logo + legend + stats ── */}
       <motion.div
@@ -45,6 +60,7 @@ export default function Home() {
           </div>
           <p className="font-mono text-[9px] tracking-[0.2em] uppercase text-white/30 pl-4">
             Privacy Transaction Visualizer
+            <span className="ml-2 text-[8px] text-yellow-400/60">[WebGPU]</span>
           </p>
           <div
             className="h-px ml-4 mt-1"

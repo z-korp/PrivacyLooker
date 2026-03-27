@@ -206,20 +206,20 @@ export function InfoPanel() {
     <AnimatePresence>
       {isOpen && (
         <motion.div
-          className="fixed top-24 right-6 z-20 w-72"
+          className="fixed top-24 right-5 z-20 w-72"
           initial={{ opacity: 0, x: 30 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 30 }}
           transition={{ type: 'spring', stiffness: 400, damping: 30 }}
         >
           <motion.div
-            className="relative rounded-xl border p-4 flex flex-col gap-3"
+            className="relative rounded-xl border p-4 flex flex-col gap-3 noise-texture"
             animate={{
-              borderColor: (isWrapper || isAvecZama) ? 'rgba(255,210,0,0.3)' : 'rgba(255,255,255,0.1)',
-              backgroundColor: 'rgba(0,0,0,0.88)',
-              boxShadow: (isWrapper || isAvecZama) ? '0 0 30px 8px rgba(255,210,0,0.1)' : 'none',
+              borderColor: (isWrapper || isAvecZama) ? 'rgba(255,210,0,0.15)' : 'rgba(255,255,255,0.08)',
+              backgroundColor: 'rgba(10,10,10,0.6)',
+              boxShadow: (isWrapper || isAvecZama) ? '0 0 20px 4px rgba(255,210,0,0.06)' : 'none',
             }}
-            style={{ backdropFilter: 'blur(16px)' }}
+            style={{ backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}
             transition={{ duration: 0.4 }}
           >
             <button

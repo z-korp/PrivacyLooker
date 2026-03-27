@@ -21,11 +21,12 @@ export function DataModeSwitch() {
     >
       {/* Live badge */}
       <div
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg border"
+        className="flex items-center gap-2 px-3 py-1.5 rounded-lg border noise-texture"
         style={{
-          borderColor: 'rgba(74,222,128,0.3)',
-          backgroundColor: 'rgba(74,222,128,0.05)',
-          backdropFilter: 'blur(10px)',
+          borderColor: 'rgba(74,222,128,0.15)',
+          backgroundColor: 'rgba(10,10,10,0.55)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
         }}
       >
         <AnimatePresence mode="wait">

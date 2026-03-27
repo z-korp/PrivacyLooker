@@ -210,8 +210,14 @@ export async function GET(request: Request) {
   const fromTs    = searchParams.get('from')  ?? undefined;
   const toTs      = searchParams.get('to')    ?? undefined;
   const tokenFilter = searchParams.get('token') ?? undefined; // 'USDT', 'USDC', etc.
-  // When a week is selected, fetch more events (a single week can have 1K+ USDT txns)
-  const shieldLimit = fromTs ? 1000 : 300;
+  // Client can request a custom cap; default 500, max 1000
+  const limitParam = parseInt(searchParams.get('limit') ?? '', 10);
+  const MAX_LIMIT = 1000;
+  const DEFAULT_LIMIT = 500;
+  const shieldLimit = Math.min(
+    Number.isFinite(limitParam) && limitParam > 0 ? limitParam : (fromTs ? MAX_LIMIT : DEFAULT_LIMIT),
+    MAX_LIMIT,
+  );
 
   try {
     const [wrapperContracts, shieldTxs, totalWrap, totalConf] =

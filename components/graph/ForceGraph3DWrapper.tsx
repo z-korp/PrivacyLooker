@@ -17,8 +17,8 @@ interface Props {
 
 // ── Fixed palette — always FHE / avec-zama ─────────────────────────────────
 const EDGE_COLORS = {
-  wrap:     { link: '#4ade80', particle: '#86efac' },   // Shield: green
-  unwrap:   { link: '#f87171', particle: '#fca5a5' },   // Unshield: red
+  wrap:     { link: '#22ff66', particle: '#66ffaa' },   // Shield: bright green
+  unwrap:   { link: '#ff4444', particle: '#ff8888' },   // Unshield: bright red
   transfer: { link: '#FFD200', particle: '#FFE566' },
 } as const;
 
@@ -29,15 +29,51 @@ const THEME = {
   ringColor:      '#FFD200',
   glowColor:      0xffd200,
   labelColor:     '#FFD200',
-  particleCount:  1,   // 1 per link — many individual links now
-  particleWidth:  1.8,
+  particleWidth:  2.5,
 } as const;
 
-// ── Pre-allocated THREE materials for node reuse ───────────────────────────
-const MAT_WALLET     = new THREE.MeshBasicMaterial({ color: THEME.walletColor });
-const MAT_HUB        = new THREE.MeshBasicMaterial({ color: THEME.walletHubColor });
-const MAT_GLOW_INNER = new THREE.MeshBasicMaterial({ color: THEME.glowColor, transparent: true, opacity: 0.20, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false });
-const MAT_GLOW_OUTER = new THREE.MeshBasicMaterial({ color: THEME.glowColor, transparent: true, opacity: 0.05, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false });
+// ── Pre-allocated THREE materials (allocated once, reused everywhere) ────────
+const MAT_WALLET = new THREE.MeshStandardMaterial({
+  color: THEME.walletColor,
+  metalness: 0.3,
+  roughness: 0.4,
+  emissive: new THREE.Color(THEME.walletColor).multiplyScalar(0.15),
+});
+const MAT_HUB = new THREE.MeshStandardMaterial({
+  color: THEME.walletHubColor,
+  metalness: 0.3,
+  roughness: 0.4,
+  emissive: new THREE.Color(THEME.walletHubColor).multiplyScalar(0.15),
+});
+// Tight core glow (close to surface, visible halo)
+const MAT_GLOW_INNER = new THREE.MeshBasicMaterial({ color: THEME.glowColor, transparent: true, opacity: 0.15, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false });
+// Wide soft halo (atmospheric glow)
+const MAT_GLOW_OUTER = new THREE.MeshBasicMaterial({ color: THEME.glowColor, transparent: true, opacity: 0.03, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false });
+
+// ── Geometry cache — quantized radii → shared SphereGeometry instances ──────
+// (OPT 1: geometry reuse — avoids allocating new geometry per node)
+const _sphereGeoCache = new Map<string, THREE.SphereGeometry>();
+
+function getSphereGeo(radius: number, wSeg: number, hSeg: number): THREE.SphereGeometry {
+  const qr = Math.round(radius * 2) / 2;  // quantize to nearest 0.5
+  const key = `${qr}_${wSeg}_${hSeg}`;
+  let geo = _sphereGeoCache.get(key);
+  if (!geo) {
+    geo = new THREE.SphereGeometry(qr, wSeg, hSeg);
+    _sphereGeoCache.set(key, geo);
+  }
+  return geo;
+}
+
+function disposeGeoCache() {
+  _sphereGeoCache.forEach(g => g.dispose());
+  _sphereGeoCache.clear();
+}
+
+// ── Invisible hitbox for wallet nodes (raycaster target only) ───────────────
+// (OPT 2: wallet visuals rendered via InstancedMesh; this handles hover/click)
+const HITBOX_GEO = new THREE.SphereGeometry(1, 4, 4);
+const HITBOX_MAT = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
 
 // Per-token phong materials (lit → depth shading on extruded faces)
 const _logoMatCache = new Map<string, THREE.MeshPhongMaterial>();
@@ -54,26 +90,31 @@ function getLogoMat(symbol: string): THREE.MeshPhongMaterial {
   return mat;
 }
 
-// ── THREE.js node factory (materials reused, only geometries allocated) ────
+// ── THREE.js node factory ───────────────────────────────────────────────────
+// Wrapper contracts → extruded logo + cached glow sphere (few nodes, full detail)
+// Wallet nodes     → invisible hitbox only; InstancedMesh handles the visual
 function buildNodeObject(node: GraphNode): THREE.Object3D {
-  const group = new THREE.Group();
-
   if (node.isWrapperContract) {
+    const group = new THREE.Group();
     const sym    = node.tokenSymbol ?? '';
-    const outerR = 6 + node.val * 0.55;     // 3D world radius (~9-13 units)
-    const depth  = outerR * 0.7;            // extrusion depth proportional to size
+    const outerR = 6 + node.val * 0.55;
+    const depth  = outerR * 0.7;
 
-    // ── Extruded token logo ──────────────────────────────────────────────────
-    // Shapes live in ±50 space — scale them down to fit our outerR
+    // ── Extruded token logo ────────────────────────────────────────────────
     const logoScale = outerR / 50;
     const geom = getExtrudedLogoGeometry(sym, depth);
     const mesh = new THREE.Mesh(geom, getLogoMat(sym));
     mesh.scale.set(logoScale, logoScale, 1);
     group.add(mesh);
 
-    // Soft volumetric glow behind the logo
+    // Inner core glow — tight, visible halo
     group.add(new THREE.Mesh(
-      new THREE.SphereGeometry(outerR * 1.55, 10, 10),
+      getSphereGeo(outerR * 1.2, 8, 8),
+      MAT_GLOW_INNER,
+    ));
+    // Outer atmospheric glow — wide, soft
+    group.add(new THREE.Mesh(
+      getSphereGeo(outerR * 2.0, 8, 8),
       MAT_GLOW_OUTER,
     ));
 
@@ -92,13 +133,12 @@ function buildNodeObject(node: GraphNode): THREE.Object3D {
     return group;
   }
 
+  // ── Wallet node — invisible hitbox scaled to outer glow radius ───────────
+  // (OPT 2: InstancedMesh draws the actual spheres; this is for interaction)
   const radius = 2 + node.val * 0.65;
-  const mat    = node.isHub ? MAT_HUB : MAT_WALLET;
-  group.add(new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 12), mat));
-  group.add(new THREE.Mesh(new THREE.SphereGeometry(radius * 1.6, 10, 10), MAT_GLOW_INNER));
-  group.add(new THREE.Mesh(new THREE.SphereGeometry(radius * 2.4, 8,  8),  MAT_GLOW_OUTER));
-
-  return group;
+  const hitbox = new THREE.Mesh(HITBOX_GEO, HITBOX_MAT);
+  hitbox.scale.setScalar(radius * 3.0);
+  return hitbox;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -112,6 +152,10 @@ function eventLabel(et: string) {
   return 'Transfer';
 }
 
+// ── Particle threshold — disable when many links to avoid particle spam ─────
+// (OPT 5)
+const PARTICLE_LINK_THRESHOLD = 80;
+
 // ── Main component ─────────────────────────────────────────────────────────
 export default function ForceGraph3DWrapper({ width, height }: Props) {
   const setSelectedNode = useAppStore((s) => s.setSelectedNode);
@@ -122,22 +166,38 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
   const fgRef       = useRef<any>(null);
   const hasZoomed   = useRef(false);
 
+  // ── InstancedMesh state for wallet nodes (OPT 2) ─────────────────────────
+  const instanceRef = useRef<{
+    core: THREE.InstancedMesh | null;
+    glowInner: THREE.InstancedMesh | null;
+    glowOuter: THREE.InstancedMesh | null;
+    walletNodes: GraphNode[];
+    animId: number;
+  }>({ core: null, glowInner: null, glowOuter: null, walletNodes: [], animId: 0 });
+
   // Register instance, lights, auto-rotate, and zoom-to-fit once physics settle
   const onEngineStop = useCallback(() => {
     const fg = fgRef.current;
     if (!fg) return;
     setFgInstance(fg);
 
-    // Ensure the scene has enough light for MeshPhongMaterial to show depth
+    // Ensure the scene has enough light for MeshStandardMaterial metalness
     const scene = fg.scene();
     if (scene && !scene.userData.__lightsAdded) {
       scene.userData.__lightsAdded = true;
-      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-      const dir1    = new THREE.DirectionalLight(0xffffff, 1.0);
+      // Deep-space ambient: subtle blue-purple hemisphere
+      const hemi = new THREE.HemisphereLight(0x4444ff, 0x000022, 0.3);
+      const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+      const dir1    = new THREE.DirectionalLight(0xffffff, 1.2);
       dir1.position.set(200, 300, 200);
-      const dir2    = new THREE.DirectionalLight(0x8888ff, 0.4);
+      const dir2    = new THREE.DirectionalLight(0x8888ff, 0.5);
       dir2.position.set(-200, -100, -200);
-      scene.add(ambient, dir1, dir2);
+      scene.add(hemi, ambient, dir1, dir2);
+
+      // Sky dome — subtle dark-blue background instead of pure black
+      const skyGeo = new THREE.SphereGeometry(3000, 16, 12);
+      const skyMat = new THREE.MeshBasicMaterial({ color: 0x060612, side: THREE.BackSide });
+      scene.add(new THREE.Mesh(skyGeo, skyMat));
     }
 
     const controls = fg.controls();
@@ -158,24 +218,20 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
   useEffect(() => {
     if (graphData.nodes.length === 0) return;
 
-    // Use a short timeout so ForceGraph3D has time to create the simulation
-    // before we call d3Force() on it (avoids "Cannot read .tick of undefined")
     const t = setTimeout(() => {
       const fg = fgRef.current;
       if (!fg) return;
 
       try {
-        // Strong repulsion spreads wallet leaf nodes apart → organic web feel
         fg.d3Force('charge')?.strength((n: GraphNode) =>
           n.isWrapperContract ? -800 : -120
         );
         fg.d3Force('link')
-          ?.distance((l: GraphLink) => l.eventType === 'wrap' ? 90 : 90)
+          ?.distance((_l: GraphLink) => 90)
           .strength(0.6);
         fg.d3Force('collision', forceCollide((n: GraphNode) =>
           n.isWrapperContract ? 30 + n.val * 1.5 : 6 + n.val
         ).strength(0.6));
-        // No centering force — let clusters float freely
         fg.d3Force('center', null);
         fg.d3ReheatSimulation();
       } catch {
@@ -187,6 +243,118 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graphData.nodes.length, graphData.links.length]);
 
+  // ── InstancedMesh setup — 3 draw calls for ALL wallet spheres (OPT 2) ────
+  useEffect(() => {
+    if (graphData.nodes.length === 0) return;
+
+    const setupTimer = setTimeout(() => {
+      const fg = fgRef.current;
+      if (!fg) return;
+      const scene = fg.scene();
+      if (!scene) return;
+
+      const inst = instanceRef.current;
+
+      // Tear down previous instances
+      cancelAnimationFrame(inst.animId);
+      [inst.core, inst.glowInner, inst.glowOuter].forEach(m => {
+        if (m) { scene.remove(m); m.geometry.dispose(); }
+      });
+
+      const walletNodes = graphData.nodes.filter(n => !n.isWrapperContract);
+      inst.walletNodes = walletNodes;
+      const count = walletNodes.length;
+      if (count === 0) return;
+
+      // Unit-sphere InstancedMeshes — scaled per instance via matrix
+      // OPT 3: 8,8 for core (reduced from 12,12), 6,6 for glow (reduced from 10,10 / 8,8)
+      // OPT 7: LOD — wallets are small, fewer segments suffice
+      inst.core = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(1, 8, 8), MAT_WALLET, count
+      );
+      inst.glowInner = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(1, 6, 6), MAT_GLOW_INNER, count
+      );
+      inst.glowOuter = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(1, 6, 6), MAT_GLOW_OUTER, count
+      );
+
+      // Instances span the whole graph — skip per-instance frustum culling
+      inst.core.frustumCulled = false;
+      inst.glowInner.frustumCulled = false;
+      inst.glowOuter.frustumCulled = false;
+
+      scene.add(inst.core, inst.glowInner, inst.glowOuter);
+
+      // Sync instance transforms from node positions every frame
+      const dummy = new THREE.Object3D();
+      let frame = 0;
+
+      function sync() {
+        frame++;
+        // OPT 6: after ~10s at 60fps (initial layout done), sync every 2nd frame
+        if (frame > 600 && frame % 2 !== 0) {
+          inst.animId = requestAnimationFrame(sync);
+          return;
+        }
+
+        for (let i = 0; i < walletNodes.length; i++) {
+          const n = walletNodes[i] as any;
+          const x = n.x ?? 0, y = n.y ?? 0, z = n.z ?? 0;
+          const r = 2 + (n.val ?? 1.5) * 0.65;
+
+          dummy.position.set(x, y, z);
+          dummy.scale.setScalar(r);
+          dummy.updateMatrix();
+          inst.core!.setMatrixAt(i, dummy.matrix);
+
+          dummy.scale.setScalar(r * 1.2);
+          dummy.updateMatrix();
+          inst.glowInner!.setMatrixAt(i, dummy.matrix);
+
+          dummy.scale.setScalar(r * 3.0);
+          dummy.updateMatrix();
+          inst.glowOuter!.setMatrixAt(i, dummy.matrix);
+        }
+
+        inst.core!.instanceMatrix.needsUpdate = true;
+        inst.glowInner!.instanceMatrix.needsUpdate = true;
+        inst.glowOuter!.instanceMatrix.needsUpdate = true;
+
+        // Slowly rotate wrapper hub logo meshes for a living feel
+        const wrapperNodes = graphData.nodes.filter(n => n.isWrapperContract);
+        for (const wn of wrapperNodes) {
+          const obj = (wn as any).__threeObj as THREE.Object3D | undefined;
+          if (obj) obj.rotation.y += 0.002;
+        }
+
+        inst.animId = requestAnimationFrame(sync);
+      }
+
+      sync();
+    }, 120); // wait for ForceGraph3D to create the scene
+
+    return () => {
+      clearTimeout(setupTimer);
+      cancelAnimationFrame(instanceRef.current.animId);
+    };
+  }, [graphData]);
+
+  // ── Full cleanup on unmount (OPT 4) ──────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      const inst = instanceRef.current;
+      cancelAnimationFrame(inst.animId);
+      [inst.core, inst.glowInner, inst.glowOuter].forEach(m => {
+        if (m) m.geometry.dispose();
+      });
+      inst.core = null;
+      inst.glowInner = null;
+      inst.glowOuter = null;
+      disposeGeoCache();
+    };
+  }, []);
+
   // Reset zoom flag when the dataset changes (week / token filter applied)
   useEffect(() => {
     if (graphData.nodes.length > 0) {
@@ -196,6 +364,12 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
 
   // Token labels are already the 'avec-zama' prefixed form in graphData
   const displayData = useMemo(() => graphData, [graphData]);
+
+  // ── OPT 5: disable particles when link count exceeds threshold ───────────
+  const particleCount = useMemo(
+    () => graphData.links.length > PARTICLE_LINK_THRESHOLD ? 0 : 1,
+    [graphData.links.length]
+  );
 
   // ── Callbacks — all stable, no deps on changing data ──────────────────────
   const nodeThreeObject = useCallback(
@@ -244,7 +418,7 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
   const linkColor     = useCallback((l: object) => edgeColors(l as GraphLink).link,     []);
   const particleColor = useCallback((l: object) => edgeColors(l as GraphLink).particle, []);
 
-  const linkWidth = useCallback((_l: object) => 0.5, []);
+  const linkWidth = useCallback((_l: object) => 0.8, []);
 
   const linkCurvature = useCallback(
     (l: object) => (l as GraphLink).curvature ?? 0.1, []
@@ -314,9 +488,11 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
       linkOpacity={0.85}
       linkCurvature={linkCurvature}
       linkLabel={linkLabel}
-      // Particles
-      linkDirectionalParticles={THEME.particleCount}
-      linkDirectionalParticleSpeed={0.005}
+      // Particles — OPT 5: conditional on link count
+      linkDirectionalParticles={particleCount}
+      linkDirectionalParticleSpeed={(l: object) =>
+        (l as GraphLink).eventType === 'wrap' ? 0.008 : 0.004
+      }
       linkDirectionalParticleColor={particleColor}
       linkDirectionalParticleWidth={THEME.particleWidth}
       // Interaction
@@ -324,10 +500,10 @@ export default function ForceGraph3DWrapper({ width, height }: Props) {
       onLinkClick={onLinkClick}
       onBackgroundClick={onBackgroundClick}
       onEngineStop={onEngineStop}
-      // Physics — slow decay = smooth glide into place
-      d3AlphaDecay={0.015}
+      // Physics — OPT 6: faster convergence (higher decay, fewer ticks)
+      d3AlphaDecay={0.025}
       d3VelocityDecay={0.3}
-      cooldownTicks={300}
+      cooldownTicks={150}
       // preserveDrawingBuffer required for GIF canvas capture
       rendererConfig={{ antialias: true, alpha: false, preserveDrawingBuffer: true }}
     />
