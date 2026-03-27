@@ -194,6 +194,8 @@ interface SimNode extends Omit<GraphNode, 'fx' | 'fy' | 'fz'> {
   __obj?: Object3D;
   __label?: SpriteText;
   __baseScale?: number;
+  /** Pulse intensity (1 = just hit, decays to 0) — triggered by particle arrival */
+  __pulse?: number;
 }
 
 interface SimLink {
@@ -778,6 +780,30 @@ export class HomeGPUScene {
         if (node.isWrapperContract) {
           node.__obj.rotation.y += 0.003;
         }
+
+        // Pulse effect: scale bump when particles arrive, decays smoothly
+        const pulse = node.__pulse ?? 0;
+        if (pulse > 0.001) {
+          const scaleBoost = 1 + pulse * 0.25;
+          node.__obj.scale.setScalar(scaleBoost);
+          // Also boost first child mesh emissive if it's a hub (Phong material)
+          if (node.isWrapperContract) {
+            const logo = node.__obj.children[0] as Mesh;
+            if (logo?.material && 'emissiveIntensity' in logo.material) {
+              (logo.material as MeshPhongNodeMaterial).emissiveIntensity = 0.2 + pulse * 1.5;
+            }
+          }
+          node.__pulse = pulse * 0.92; // exponential decay
+        } else if (node.__pulse !== undefined) {
+          node.__obj.scale.setScalar(1);
+          if (node.isWrapperContract) {
+            const logo = node.__obj.children[0] as Mesh;
+            if (logo?.material && 'emissiveIntensity' in logo.material) {
+              (logo.material as MeshPhongNodeMaterial).emissiveIntensity = 0.2;
+            }
+          }
+          node.__pulse = 0;
+        }
       }
       if (node.__label) {
         const r = node.isWrapperContract ? this.hubRadius(node) : 2;
@@ -853,8 +879,17 @@ export class HomeGPUScene {
     for (const link of this.simLinks) {
       if (!link.__particle) continue;
       const speed = link.eventType === 'wrap' ? 0.008 : 0.005;
-      link.__particleT = ((link.__particleT ?? 0) + speed) % 1;
-      const t = link.__particleT;
+      const prevT = link.__particleT ?? 0;
+      const nextT = (prevT + speed) % 1;
+
+      // Particle wrapped around → it arrived at the target node → trigger pulse
+      if (nextT < prevT) {
+        const target = link.target;
+        target.__pulse = Math.min((target.__pulse ?? 0) + 0.5, 1.0);
+      }
+
+      link.__particleT = nextT;
+      const t = nextT;
 
       _s.set(link.source.x, link.source.y, link.source.z);
       _e.set(link.target.x, link.target.y, link.target.z);
