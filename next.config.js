@@ -16,6 +16,9 @@ const nextConfig = {
     'three-spritetext',
   ],
 
+  // Acknowledge Turbopack (Next.js 16 default) — we use --webpack for build
+  turbopack: {},
+
   webpack: (config) => {
     // Use `$` for exact-match alias — prevents prefix matching which would corrupt three/subpath imports
     config.resolve.alias['three$'] = path.join(THREE_ROOT, 'build/three.cjs');
