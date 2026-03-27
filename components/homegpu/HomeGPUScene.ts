@@ -41,8 +41,9 @@ import {
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import SpriteText from 'three-spritetext';
 // @ts-expect-error — d3-force-3d has no types, installed as transitive dep
-import { forceSimulation, forceManyBody, forceLink, forceCollide } from 'd3-force-3d';
+import { forceSimulation, forceManyBody, forceLink, forceCollide, forceCenter } from 'd3-force-3d';
 import type { GraphData, GraphNode, GraphLink } from '@/types/graph';
+import { getExtrudedLogoGeometry } from '@/lib/tokenLogos';
 
 // ── Token colors (matches TOKEN_COLOR in lib/tokenLogos.ts) ─────────────────
 
@@ -175,8 +176,70 @@ export class HomeGPUScene {
   private flyFrom: { pos: Vector3; lookAt: Vector3 } | null = null;
   private flyFrame = 0;
 
+  // Focused node orbit state
+  private focusedNodeId: string | null = null;
+  private focusOrbitAngle = 0;
+
   setCallbacks(cb: SceneCallbacks): void {
     this.callbacks = cb;
+  }
+
+  /**
+   * Focus camera on a specific wrapper contract node (by id).
+   * Pass null to reset to the default overview.
+   */
+  focusOnNode(nodeId: string | null): void {
+    if (nodeId === null) {
+      // Reset to overview — compute bounding sphere of all nodes
+      this.focusedNodeId = null;
+      this.controls.autoRotate = true;
+      this.controls.autoRotateSpeed = 0.35;
+
+      let maxR = 0;
+      for (const n of this.simNodes) {
+        const r = Math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
+        if (r > maxR) maxR = r;
+      }
+      const radius = Math.max(maxR, 30);
+      const target = new Vector3(0, 0, 0);
+      const camPos = new Vector3(0, radius * 1.5, radius * 3);
+      this.startFlyTo(camPos, target);
+      return;
+    }
+
+    const node = this.simNodes.find((n) => n.id === nodeId);
+    if (!node) return;
+
+    this.focusedNodeId = nodeId;
+    this.focusOrbitAngle = 0;
+
+    // Calculate bounding radius of the cluster (logo + connected wallets)
+    let maxR = 0;
+    for (const link of this.simLinks) {
+      const peer =
+        link.source.id === nodeId ? link.target :
+        link.target.id === nodeId ? link.source : null;
+      if (!peer) continue;
+      const dx = peer.x - node.x;
+      const dy = peer.y - node.y;
+      const dz = peer.z - node.z;
+      const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (r > maxR) maxR = r;
+    }
+    const dist = Math.max(50, maxR * 2.5);
+
+    // Fly to orbit position around the node
+    const target = new Vector3(node.x, node.y, node.z);
+    const camPos = new Vector3(
+      node.x + dist * 0.6,
+      node.y + dist * 0.35,
+      node.z + dist * 0.6,
+    );
+    this.startFlyTo(camPos, target);
+
+    // After fly completes, autoRotate will orbit around the new target
+    this.controls.autoRotate = true;
+    this.controls.autoRotateSpeed = 0.8;
   }
 
   async init(container: HTMLElement): Promise<void> {
@@ -199,7 +262,7 @@ export class HomeGPUScene {
     this.scene = scene;
 
     // ── Camera ────────────────────────────────────────────────────────────
-    const camera = new PerspectiveCamera(60, w / h, 0.1, 2000);
+    const camera = new PerspectiveCamera(75, w / h, 0.1, 5000);
     camera.position.set(0, 80, 200);
     this.camera = camera;
 
@@ -246,6 +309,7 @@ export class HomeGPUScene {
       this.syncPositions();
       this.animateParticles();
       this.animateFlyTo();
+      this.updateFocusedOrbit();
       this.renderer.render(this.scene, this.camera);
     });
   }
@@ -513,6 +577,16 @@ export class HomeGPUScene {
     }
   }
 
+  /** Keep the orbit target tracking the focused node's live position */
+  private updateFocusedOrbit(): void {
+    if (!this.focusedNodeId) return;
+    const node = this.simNodes.find((n) => n.id === this.focusedNodeId);
+    if (!node) return;
+    // Only track while NOT flying — the fly animation handles its own lerp
+    if (this.flyTarget) return;
+    this.controls.target.set(node.x, node.y, node.z);
+  }
+
   // ── Force simulation tick ─────────────────────────────────────────────
 
   private tickSimulation(): void {
@@ -521,7 +595,7 @@ export class HomeGPUScene {
     this.simTickCount++;
     if (this.simulation.alpha() < 0.01) {
       this.simSettled = true;
-      this.zoomToFit();
+      this.focusOnNode(this.focusedNodeId);
     }
   }
 
@@ -624,10 +698,10 @@ export class HomeGPUScene {
       const r = Math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z);
       if (r > maxR) maxR = r;
     }
-    const dist = maxR * 2.2 + 60;
-    this.camera.position.set(dist * 0.5, dist * 0.35, dist * 0.7);
-    this.controls.target.set(0, 0, 0);
-    this.controls.update();
+    const dist = maxR * 3.0 + 100;
+    const target = new Vector3(0, 0, 0);
+    const camPos = new Vector3(dist * 0.5, dist * 0.35, dist * 0.7);
+    this.startFlyTo(camPos, target);
   }
 
   private hubRadius(node: { val: number }): number {
@@ -638,6 +712,7 @@ export class HomeGPUScene {
 
   updateData(graphData: GraphData): void {
     const { nodes, links } = graphData;
+    console.log('[HomeGPU] Data received:', nodes.length, 'nodes', links.length, 'links');
     if (nodes.length === 0) return;
 
     // Tear down previous
@@ -680,6 +755,9 @@ export class HomeGPUScene {
       });
     }
 
+    console.log('[HomeGPU] Scene objects:', this.simLinks.length, 'simLinks rendered',
+      '(skipped', links.length - this.simLinks.length, 'orphan links)');
+
     // Create Three.js objects for nodes
     for (const node of this.simNodes) {
       if (node.isWrapperContract) {
@@ -699,10 +777,11 @@ export class HomeGPUScene {
 
     // Start d3-force-3d simulation
     this.simulation = forceSimulation(this.simNodes, 3)
+      .force('center', forceCenter(0, 0, 0).strength(0.3))
       .force('charge', forceManyBody()
-        .strength((n: SimNode) => n.isWrapperContract ? -800 : -120))
+        .strength((n: SimNode) => n.isWrapperContract ? -250 : -120))
       .force('link', forceLink(this.simLinks)
-        .distance(90)
+        .distance(35)
         .strength(0.6))
       .force('collision', forceCollide()
         .radius((n: SimNode) => n.isWrapperContract ? 30 + n.val * 1.5 : 6 + n.val)
@@ -718,19 +797,23 @@ export class HomeGPUScene {
     const group = new Group();
     const sym = node.tokenSymbol ?? '';
     const outerR = this.hubRadius(node);
+    const depth = outerR * 0.1;
 
-    const coreMesh = new Mesh(new SphereGeometry(outerR, 16, 16), getHubMat(sym));
-    group.add(coreMesh);
+    // Extruded 3D token logo (same as homepage, scaled down)
+    const logoScale = outerR / 100;
+    const geom = getExtrudedLogoGeometry(sym, depth);
+    const logoMesh = new Mesh(geom, getHubMat(sym));
+    logoMesh.scale.set(logoScale, logoScale, 1);
+    group.add(logoMesh);
 
-    const gi = new Mesh(new SphereGeometry(outerR * 1.4, 10, 10), MAT_GLOW_INNER);
-    group.add(gi);
-
-    const go = new Mesh(new SphereGeometry(outerR * 2.0, 8, 8), MAT_GLOW_OUTER);
+    // Soft glow behind the logo
+    const go = new Mesh(new SphereGeometry(outerR * 1.55, 10, 10), MAT_GLOW_OUTER);
     group.add(go);
 
     this.nodeGroup.add(group);
     node.__obj = group;
 
+    // Label below
     const label = new SpriteText(`c${sym || '?'}`);
     label.color = '#FFD200';
     label.textHeight = outerR * 0.52;

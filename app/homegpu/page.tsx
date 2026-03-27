@@ -1,7 +1,8 @@
 'use client';
 
+import { Suspense, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { InfoPanel }           from '@/components/overlay/InfoPanel';
 import { ErrorBanner }         from '@/components/overlay/ErrorBanner';
 import { GifExporter }         from '@/components/overlay/GifExporter';
@@ -11,20 +12,11 @@ import { PrivacyToggle }       from '@/components/overlay/PrivacyToggle';
 import { DataModeSwitch }      from '@/components/overlay/DataModeSwitch';
 import { Legend }               from '@/components/overlay/Legend';
 import { StatsPanel }           from '@/components/overlay/StatsPanel';
+import { CryptoList }          from '@/components/homegpu/CryptoList';
+import { LoadingScreen }       from '@/components/homegpu/LoadingScreen';
 
 const HomeGPUCanvas = dynamic(() => import('@/components/homegpu/HomeGPUCanvas'), {
   ssr: false,
-  loading: () => (
-    <div className="fixed inset-0 flex items-center justify-center bg-black">
-      <div className="flex flex-col items-center gap-4">
-        <div className="w-12 h-12 border-2 border-t-transparent rounded-full animate-spin"
-          style={{ borderColor: '#FFD200', borderTopColor: 'transparent' }} />
-        <p className="font-mono text-xs text-white/40 tracking-widest uppercase">
-          Initialising WebGPU engine&hellip;
-        </p>
-      </div>
-    </div>
-  ),
 });
 
 const fadeUp = {
@@ -33,10 +25,25 @@ const fadeUp = {
 };
 
 export default function HomeGPU() {
+  const [ready, setReady] = useState(false);
+  const handleReady = useCallback(() => setReady(true), []);
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-black">
-      {/* WebGPU 3D Scene */}
-      <HomeGPUCanvas />
+      {/* ── Full-screen loading overlay ── */}
+      <AnimatePresence>
+        {!ready && <LoadingScreen />}
+      </AnimatePresence>
+
+      {/* WebGPU 3D Scene wrapped in Suspense for code-split chunk loading */}
+      <Suspense
+        fallback={
+          <div className="fixed inset-0 z-0 bg-black" />
+        }
+      >
+        <HomeGPUCanvas onReady={handleReady} focusedNodeId={focusedNodeId} />
+      </Suspense>
 
       {/* ── Top-left panel: logo + legend + stats ── */}
       <motion.div
@@ -78,6 +85,22 @@ export default function HomeGPU() {
           <div className="h-px" style={{ backgroundColor: 'rgba(255,255,255,0.06)' }} />
           <StatsPanel />
         </motion.div>
+      </motion.div>
+
+      {/* ── Right-side crypto list ── */}
+      <motion.div
+        className="fixed top-1/2 right-6 -translate-y-1/2 z-10 overflow-y-auto rounded-xl p-3"
+        style={{
+          maxHeight: '60vh',
+          width: 180,
+          background: 'rgba(0,0,0,0.75)',
+          backdropFilter: 'blur(16px)',
+          border: '1px solid rgba(255,255,255,0.08)',
+        }}
+        {...fadeUp}
+        transition={{ duration: 0.5, delay: 0.3, ease: 'easeOut' }}
+      >
+        <CryptoList focusedNodeId={focusedNodeId} onFocusNode={setFocusedNodeId} />
       </motion.div>
 
       {/* ── Top-right panel: FHE badge + mode indicator ── */}
