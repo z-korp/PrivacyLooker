@@ -154,19 +154,6 @@ function getLinkMat(eventType: string): LineBasicNodeMaterial {
   return mat;
 }
 
-// Per-event-type glow trail materials — wider, softer, additive-blended
-const _linkGlowMatCache = new Map<string, LineBasicNodeMaterial>();
-function getLinkGlowMat(eventType: string): LineBasicNodeMaterial {
-  if (_linkGlowMatCache.has(eventType)) return _linkGlowMatCache.get(eventType)!;
-  const c = EDGE_COLORS[eventType] ?? 0xffd200;
-  const mat = new LineBasicNodeMaterial({
-    color: c, transparent: true, opacity: 0.2,
-    blending: AdditiveBlending, depthWrite: false,
-  });
-  _linkGlowMatCache.set(eventType, mat);
-  _sharedMats.add(mat);
-  return mat;
-}
 
 // ── Shared geometries ───────────────────────────────────────────────────────
 
@@ -206,7 +193,6 @@ interface SimLink {
   // Original graph link data for tooltips
   graphLink?: GraphLink;
   __line?: Line;
-  __glowLine?: Line;
   __particle?: Mesh;
   __particleT?: number;
   __origColor?: number;
@@ -231,7 +217,6 @@ export class HomeGPUScene {
   // Scene groups
   private nodeGroup = new Group();
   private linkGroup = new Group();
-  private linkGlowGroup = new Group();
   private particleGroup = new Group();
   private labelGroup = new Group();
 
@@ -380,7 +365,6 @@ export class HomeGPUScene {
 
     // ── Scene groups ─────────────────────────────────────────────────────
     scene.add(this.linkGroup);
-    scene.add(this.linkGlowGroup);
     scene.add(this.particleGroup);
     scene.add(this.nodeGroup);
     scene.add(this.labelGroup);
@@ -847,17 +831,6 @@ export class HomeGPUScene {
       pos.needsUpdate = true;
       link.__line.geometry.computeBoundingSphere();
 
-      // Sync glow trail line (shares same curve data)
-      if (link.__glowLine) {
-        const gp = link.__glowLine.geometry.getAttribute('position');
-        if (gp) {
-          for (let i = 0; i < numPts; i++) {
-            gp.setXYZ(i, pos.getX(i), pos.getY(i), pos.getZ(i));
-          }
-          gp.needsUpdate = true;
-          link.__glowLine.geometry.computeBoundingSphere();
-        }
-      }
     }
   }
 
@@ -937,7 +910,6 @@ export class HomeGPUScene {
     this.simulation?.stop();
     this.clearGroup(this.nodeGroup);
     this.clearGroup(this.linkGroup);
-    this.clearGroup(this.linkGlowGroup);
     this.clearGroup(this.particleGroup);
     this.clearGroup(this.labelGroup);
     this.objToNode.clear();
@@ -1059,18 +1031,10 @@ export class HomeGPUScene {
     const geo = new BufferGeometry();
     geo.setAttribute('position', new Float32BufferAttribute(positions, 3));
 
-    // Core edge line
     const line = new Line(geo, getLinkMat(link.eventType));
     this.linkGroup.add(line);
     link.__line = line;
     link.__origColor = EDGE_COLORS[link.eventType] ?? 0xffd200;
-
-    // Glow trail — same geometry, wider additive-blended line behind
-    const glowGeo = new BufferGeometry();
-    glowGeo.setAttribute('position', new Float32BufferAttribute(new Float32Array(numPoints * 3), 3));
-    const glowLine = new Line(glowGeo, getLinkGlowMat(link.eventType));
-    this.linkGlowGroup.add(glowLine);
-    link.__glowLine = glowLine;
   }
 
   private createParticleVisual(link: SimLink): void {
@@ -1133,7 +1097,6 @@ export class HomeGPUScene {
     this.controls?.dispose();
     this.clearGroup(this.nodeGroup);
     this.clearGroup(this.linkGroup);
-    this.clearGroup(this.linkGlowGroup);
     this.clearGroup(this.particleGroup);
     this.clearGroup(this.labelGroup);
     if (this.tooltipEl?.parentNode) this.tooltipEl.parentNode.removeChild(this.tooltipEl);
