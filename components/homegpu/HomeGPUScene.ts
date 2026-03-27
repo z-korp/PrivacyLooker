@@ -5,8 +5,8 @@
  * and Three.js WebGPURenderer for rendering.
  *
  * Features:
- *   - Hub nodes: colored spheres with glow + SpriteText labels
- *   - Wallet nodes: small spheres with subtle glow
+ *   - Hub nodes: extruded 3D token logos + SpriteText labels
+ *   - Wallet nodes: small spheres
  *   - Links: curved bezier lines with flowing particles
  *   - Force physics: charge repulsion + link attraction + collision
  *   - Interactivity: hover tooltips, click-to-zoom, drag nodes, click links
@@ -14,6 +14,8 @@
 
 import {
   WebGPURenderer,
+  PostProcessing,
+
   Scene,
   PerspectiveCamera,
   Color,
@@ -21,10 +23,10 @@ import {
   DirectionalLight,
   Mesh,
   SphereGeometry,
-  MeshBasicMaterial,
-  MeshPhongMaterial,
+  MeshBasicNodeMaterial,
+  MeshPhongNodeMaterial,
   BufferGeometry,
-  LineBasicMaterial,
+  LineBasicNodeMaterial,
   Line,
   Float32BufferAttribute,
   Group,
@@ -33,10 +35,27 @@ import {
   Vector3,
   Plane,
   Raycaster,
-  QuadraticBezierCurve3,
-  AdditiveBlending,
   BackSide,
+  AdditiveBlending,
+
+  // Starfield
+  Points,
+  PointsNodeMaterial,
 } from 'three/webgpu';
+
+import {
+  uniform as tslUniform,
+  pass,
+  bloom,
+  Fn,
+  float,
+  vec2,
+  vec3,
+  vec4,
+  viewportUV,
+  hash,
+  timerGlobal,
+} from 'three/tsl';
 
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import SpriteText from 'three-spritetext';
@@ -63,7 +82,7 @@ const BG = new Color(0x000000);
 // Edge colors by event type
 const EDGE_COLORS: Record<string, number> = {
   wrap: 0x4ade80,
-  unwrap: 0xf87171,
+  unwrap: 0xff6666,
   transfer: 0xffd200,
   confidential: 0xc084fc,
 };
@@ -74,37 +93,96 @@ const PARTICLE_COLORS: Record<string, number> = {
   confidential: 0xd8b4fe,
 };
 
-// ── Shared materials (allocated once) ───────────────────────────────────────
+// ── Shared materials (WebGPU node materials — compile directly to WGSL) ─────
 
-const MAT_WALLET = new MeshBasicMaterial({ color: WALLET_COLOR });
-const MAT_GLOW_INNER = new MeshBasicMaterial({
-  color: 0xffd200, transparent: true, opacity: 0.15,
-  side: BackSide, blending: AdditiveBlending, depthWrite: false,
-});
-const MAT_GLOW_OUTER = new MeshBasicMaterial({
-  color: 0xffd200, transparent: true, opacity: 0.04,
-  side: BackSide, blending: AdditiveBlending, depthWrite: false,
-});
+const MAT_WALLET = new MeshBasicNodeMaterial({ color: WALLET_COLOR });
+
+// Glow pulse uniform — updated once per frame, shared across all glow shells
+const _glowTime = tslUniform(0);
+
+// Shared materials that must survive clearGroup disposal cycles
+const _sharedMats = new Set<object>([MAT_WALLET]);
 
 // Per-token hub materials (cached)
-const _hubMatCache = new Map<string, MeshPhongMaterial>();
-function getHubMat(symbol: string): MeshPhongMaterial {
+const _hubMatCache = new Map<string, MeshPhongNodeMaterial>();
+function getHubMat(symbol: string): MeshPhongNodeMaterial {
   if (_hubMatCache.has(symbol)) return _hubMatCache.get(symbol)!;
   const col = TOKEN_HEX[symbol] ?? DEFAULT_HUB_COLOR;
-  const mat = new MeshPhongMaterial({
+  const mat = new MeshPhongNodeMaterial({
     color: col, emissive: col, emissiveIntensity: 0.2,
     shininess: 80, specular: 0x888888,
   });
   _hubMatCache.set(symbol, mat);
+  _sharedMats.add(mat);
+  return mat;
+}
+
+// Per-token glow shell materials (cached — TSL-animated opacity)
+const _glowMatCache = new Map<string, MeshBasicNodeMaterial>();
+function getGlowMat(symbol: string): MeshBasicNodeMaterial {
+  if (_glowMatCache.has(symbol)) return _glowMatCache.get(symbol)!;
+  const col = TOKEN_HEX[symbol] ?? DEFAULT_HUB_COLOR;
+  const mat = new MeshBasicNodeMaterial({
+    color: col, transparent: true, depthWrite: false, side: BackSide,
+  });
+  // GPU-driven pulsing opacity via TSL: 0.12 ± 0.04
+  mat.opacityNode = _glowTime.mul(2.0).sin().mul(0.04).add(0.12);
+  _glowMatCache.set(symbol, mat);
+  _sharedMats.add(mat);
+  return mat;
+}
+
+// Per-event-type particle materials (cached — only 4 types)
+const _particleMatCache = new Map<string, MeshBasicNodeMaterial>();
+function getParticleMat(eventType: string): MeshBasicNodeMaterial {
+  if (_particleMatCache.has(eventType)) return _particleMatCache.get(eventType)!;
+  const color = PARTICLE_COLORS[eventType] ?? 0xffe566;
+  const mat = new MeshBasicNodeMaterial({ color, transparent: true, opacity: 0.8 });
+  _particleMatCache.set(eventType, mat);
+  _sharedMats.add(mat);
+  return mat;
+}
+
+// Per-event-type link materials (cached — only 4 types)
+const _linkMatCache = new Map<string, LineBasicNodeMaterial>();
+function getLinkMat(eventType: string): LineBasicNodeMaterial {
+  if (_linkMatCache.has(eventType)) return _linkMatCache.get(eventType)!;
+  const c = EDGE_COLORS[eventType] ?? 0xffd200;
+  const mat = new LineBasicNodeMaterial({ color: c, transparent: true, opacity: 0.85 });
+  _linkMatCache.set(eventType, mat);
+  _sharedMats.add(mat);
+  return mat;
+}
+
+// Per-event-type glow trail materials — wider, softer, additive-blended
+const _linkGlowMatCache = new Map<string, LineBasicNodeMaterial>();
+function getLinkGlowMat(eventType: string): LineBasicNodeMaterial {
+  if (_linkGlowMatCache.has(eventType)) return _linkGlowMatCache.get(eventType)!;
+  const c = EDGE_COLORS[eventType] ?? 0xffd200;
+  const mat = new LineBasicNodeMaterial({
+    color: c, transparent: true, opacity: 0.2,
+    blending: AdditiveBlending, depthWrite: false,
+  });
+  _linkGlowMatCache.set(eventType, mat);
+  _sharedMats.add(mat);
   return mat;
 }
 
 // ── Shared geometries ───────────────────────────────────────────────────────
 
 const GEO_WALLET = new SphereGeometry(1, 8, 8);
-const GEO_GLOW_INNER = new SphereGeometry(1, 6, 6);
-const GEO_GLOW_OUTER = new SphereGeometry(1, 6, 6);
 const GEO_PARTICLE = new SphereGeometry(1, 4, 4);
+const GEO_GLOW = new SphereGeometry(1, 12, 12);
+
+const GEO_HIGHLIGHT = new SphereGeometry(1, 16, 16);
+const MAT_HIGHLIGHT = new MeshBasicNodeMaterial({
+  color: 0xffd200, transparent: true, opacity: 0.3,
+  blending: AdditiveBlending, depthWrite: false,
+});
+_sharedMats.add(MAT_HIGHLIGHT);
+
+// Pre-allocated fallback vector for cross-product edge cases
+const _FALLBACK_UP = new Vector3(0, 0, 1);
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -126,6 +204,7 @@ interface SimLink {
   // Original graph link data for tooltips
   graphLink?: GraphLink;
   __line?: Line;
+  __glowLine?: Line;
   __particle?: Mesh;
   __particleT?: number;
   __origColor?: number;
@@ -140,6 +219,7 @@ export interface SceneCallbacks {
 
 export class HomeGPUScene {
   private renderer!: WebGPURenderer;
+  private postProcessing!: PostProcessing;
   private scene!: Scene;
   private camera!: PerspectiveCamera;
   private controls!: OrbitControls;
@@ -149,6 +229,7 @@ export class HomeGPUScene {
   // Scene groups
   private nodeGroup = new Group();
   private linkGroup = new Group();
+  private linkGlowGroup = new Group();
   private particleGroup = new Group();
   private labelGroup = new Group();
 
@@ -159,6 +240,16 @@ export class HomeGPUScene {
   private simLinks: SimLink[] = [];
   private simSettled = false;
   private simTickCount = 0;
+
+  // O(1) node lookup by id (rebuilt on each updateData)
+  private nodeById = new Map<string, SimNode>();
+
+  // Pre-allocated vectors for zero-allocation hot paths
+  private _dragIntersection = new Vector3();
+  private _samplePt = new Vector3();
+
+  // Hover highlight sphere (reused, repositioned on hover)
+  private highlightMesh = new Mesh(GEO_HIGHLIGHT, MAT_HIGHLIGHT);
 
   // ── Interaction state ──────────────────────────────────────────────────
   private raycaster = new Raycaster();
@@ -207,7 +298,7 @@ export class HomeGPUScene {
       return;
     }
 
-    const node = this.simNodes.find((n) => n.id === nodeId);
+    const node = this.nodeById.get(nodeId);
     if (!node) return;
 
     this.focusedNodeId = nodeId;
@@ -287,9 +378,39 @@ export class HomeGPUScene {
 
     // ── Scene groups ─────────────────────────────────────────────────────
     scene.add(this.linkGroup);
+    scene.add(this.linkGlowGroup);
     scene.add(this.particleGroup);
     scene.add(this.nodeGroup);
     scene.add(this.labelGroup);
+
+    // ── Hover highlight mesh (invisible until hover) ────────────────────
+    this.highlightMesh.visible = false;
+    scene.add(this.highlightMesh);
+
+    // ── Starfield background ──────────────────────────────────────────────
+    this.createStarfield(scene);
+
+    // ── Post-processing: bloom + vignette ─────────────────────────────────
+    const postProcessing = new PostProcessing(renderer);
+    const scenePass = pass(scene, camera);
+    const sceneColor = scenePass.getTextureNode('output');
+
+    // Bloom — makes emissive/bright objects glow
+    const bloomPass = bloom(sceneColor);
+    bloomPass.threshold.value = 0.4;
+    bloomPass.strength.value = 0.8;
+    bloomPass.radius.value = 0.4;
+
+    // Vignette — darken corners for cinematic feel
+    const vignette = Fn(() => {
+      const uv = viewportUV;
+      const dist = uv.sub(0.5).length();
+      return float(1.0).sub(dist.mul(1.3)).clamp(0.3, 1.0);
+    });
+
+    // Combine: scene + bloom, then vignette
+    postProcessing.outputNode = sceneColor.add(bloomPass).mul(vignette());
+    this.postProcessing = postProcessing;
 
     // ── Tooltip ──────────────────────────────────────────────────────────
     this.createTooltip(container);
@@ -304,14 +425,52 @@ export class HomeGPUScene {
     // ── Render loop ──────────────────────────────────────────────────────
     renderer.setAnimationLoop(() => {
       if (this.disposed) return;
+      // Update TSL glow uniform (drives all glow shell opacity on GPU)
+      _glowTime.value = performance.now() * 0.001;
       this.controls.update();
       this.tickSimulation();
       this.syncPositions();
       this.animateParticles();
       this.animateFlyTo();
       this.updateFocusedOrbit();
-      this.renderer.render(this.scene, this.camera);
+      // Render through post-processing pipeline (bloom + vignette)
+      this.postProcessing.render();
     });
+  }
+
+  // ── Starfield background ──────────────────────────────────────────────
+
+  private createStarfield(scene: Scene): void {
+    const COUNT = 2000;
+    const positions = new Float32Array(COUNT * 3);
+    const spread = 1500;
+
+    for (let i = 0; i < COUNT; i++) {
+      positions[i * 3] = (Math.random() - 0.5) * spread;
+      positions[i * 3 + 1] = (Math.random() - 0.5) * spread;
+      positions[i * 3 + 2] = (Math.random() - 0.5) * spread;
+    }
+
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new Float32BufferAttribute(positions, 3));
+
+    // TSL-driven twinkling stars
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mat = new PointsNodeMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+      sizeAttenuation: true,
+      size: 2,
+    }) as any;
+    mat.colorNode = vec3(0.6, 0.65, 0.8);
+    // Subtle twinkle per-star using hash of time
+    mat.sizeNode = hash(float(0).add(timerGlobal().mul(0.05))).mul(1.5).add(0.5);
+    mat.opacityNode = hash(float(0).add(timerGlobal().mul(0.15))).mul(0.4).add(0.1);
+
+    const stars = new Points(geo, mat);
+    stars.frustumCulled = false;
+    scene.add(stars);
   }
 
   // ── Tooltip DOM element ────────────────────────────────────────────────
@@ -392,7 +551,7 @@ export class HomeGPUScene {
     // Raycast against all node group children (groups containing meshes)
     const meshes: Object3D[] = [];
     for (const group of this.nodeGroup.children) {
-      // Only add the first child (core mesh) for raycasting — not glow shells
+      // Only add the first child (core mesh) for raycasting
       if (group.children.length > 0) meshes.push(group.children[0]);
     }
     const hits = this.raycaster.intersectObjects(meshes, false);
@@ -414,11 +573,10 @@ export class HomeGPUScene {
     // ── Dragging ─────────────────────────────────────────────────────────
     if (this.isDragging && this.dragNode) {
       this.raycaster.setFromCamera(this.mouse, this.camera);
-      const intersection = new Vector3();
-      this.raycaster.ray.intersectPlane(this.dragPlane, intersection);
-      this.dragNode.fx = intersection.x;
-      this.dragNode.fy = intersection.y;
-      this.dragNode.fz = intersection.z;
+      this.raycaster.ray.intersectPlane(this.dragPlane, this._dragIntersection);
+      this.dragNode.fx = this._dragIntersection.x;
+      this.dragNode.fy = this._dragIntersection.y;
+      this.dragNode.fz = this._dragIntersection.z;
       // Reheat simulation so surrounding nodes react
       if (this.simulation && this.simSettled) {
         this.simSettled = false;
@@ -436,11 +594,23 @@ export class HomeGPUScene {
         this.hoveredNode.__obj.scale.setScalar(s);
       }
       this.hoveredNode = node;
-      // Hover new
+      // Hover new — scale up + show additive highlight sphere
       if (node?.__obj) {
         node.__baseScale = node.__obj.scale.x;
         node.__obj.scale.setScalar(node.__obj.scale.x * 1.2);
+
+        const r = node.isWrapperContract ? this.hubRadius(node) * 1.8 : (2 + node.val * 0.65) * 2.5;
+        this.highlightMesh.scale.setScalar(r);
+        this.highlightMesh.position.set(node.x, node.y, node.z);
+        this.highlightMesh.visible = true;
+      } else {
+        this.highlightMesh.visible = false;
       }
+    }
+
+    // Keep highlight tracking the hovered node's position
+    if (this.hoveredNode) {
+      this.highlightMesh.position.set(this.hoveredNode.x, this.hoveredNode.y, this.hoveredNode.z);
     }
 
     if (node) {
@@ -533,12 +703,12 @@ export class HomeGPUScene {
       const sx = link.source.x, sy = link.source.y, sz = link.source.z;
       const tx = link.target.x, ty = link.target.y, tz = link.target.z;
       for (const t of [0.25, 0.5, 0.75]) {
-        const pt = new Vector3(
+        this._samplePt.set(
           sx + (tx - sx) * t,
           sy + (ty - sy) * t,
           sz + (tz - sz) * t,
         );
-        const d = ray.distanceToPoint(pt);
+        const d = ray.distanceToPoint(this._samplePt);
         if (d < bestDist) {
           bestDist = d;
           best = link;
@@ -580,7 +750,7 @@ export class HomeGPUScene {
   /** Keep the orbit target tracking the focused node's live position */
   private updateFocusedOrbit(): void {
     if (!this.focusedNodeId) return;
-    const node = this.simNodes.find((n) => n.id === this.focusedNodeId);
+    const node = this.nodeById.get(this.focusedNodeId);
     if (!node) return;
     // Only track while NOT flying — the fly animation handles its own lerp
     if (this.flyTarget) return;
@@ -636,18 +806,35 @@ export class HomeGPUScene {
       const lineLen = _vLine.length();
 
       _perp.crossVectors(_vLine, _up);
-      if (_perp.lengthSq() < 0.001) _perp.crossVectors(_vLine, new Vector3(0, 0, 1));
+      if (_perp.lengthSq() < 0.001) _perp.crossVectors(_vLine, _FALLBACK_UP);
       _perp.normalize();
 
       _ctrl.copy(_mid).addScaledVector(_perp, link.curvature * lineLen);
 
-      const curve = new QuadraticBezierCurve3(_start, _ctrl, _end);
-      const points = curve.getPoints(HomeGPUScene.CURVE_SEGMENTS);
-      for (let i = 0; i < points.length; i++) {
-        pos.setXYZ(i, points[i].x, points[i].y, points[i].z);
+      const numPts = HomeGPUScene.CURVE_SEGMENTS + 1;
+      for (let i = 0; i < numPts; i++) {
+        const t = i / HomeGPUScene.CURVE_SEGMENTS;
+        const t1 = 1 - t;
+        pos.setXYZ(i,
+          t1 * t1 * _start.x + 2 * t1 * t * _ctrl.x + t * t * _end.x,
+          t1 * t1 * _start.y + 2 * t1 * t * _ctrl.y + t * t * _end.y,
+          t1 * t1 * _start.z + 2 * t1 * t * _ctrl.z + t * t * _end.z,
+        );
       }
       pos.needsUpdate = true;
       link.__line.geometry.computeBoundingSphere();
+
+      // Sync glow trail line (shares same curve data)
+      if (link.__glowLine) {
+        const gp = link.__glowLine.geometry.getAttribute('position');
+        if (gp) {
+          for (let i = 0; i < numPts; i++) {
+            gp.setXYZ(i, pos.getX(i), pos.getY(i), pos.getZ(i));
+          }
+          gp.needsUpdate = true;
+          link.__glowLine.geometry.computeBoundingSphere();
+        }
+      }
     }
   }
 
@@ -675,7 +862,7 @@ export class HomeGPUScene {
       _v.subVectors(_e, _s);
       const lineLen = _v.length();
       _p.crossVectors(_v, _up);
-      if (_p.lengthSq() < 0.001) _p.crossVectors(_v, new Vector3(0, 0, 1));
+      if (_p.lengthSq() < 0.001) _p.crossVectors(_v, _FALLBACK_UP);
       _p.normalize();
       _c.copy(_m).addScaledVector(_p, link.curvature * lineLen);
 
@@ -712,13 +899,13 @@ export class HomeGPUScene {
 
   updateData(graphData: GraphData): void {
     const { nodes, links } = graphData;
-    console.log('[HomeGPU] Data received:', nodes.length, 'nodes', links.length, 'links');
     if (nodes.length === 0) return;
 
     // Tear down previous
     this.simulation?.stop();
     this.clearGroup(this.nodeGroup);
     this.clearGroup(this.linkGroup);
+    this.clearGroup(this.linkGlowGroup);
     this.clearGroup(this.particleGroup);
     this.clearGroup(this.labelGroup);
     this.objToNode.clear();
@@ -735,8 +922,9 @@ export class HomeGPUScene {
       vx: 0, vy: 0, vz: 0,
     }));
 
-    const nodeById = new Map<string, SimNode>();
-    for (const sn of this.simNodes) nodeById.set(sn.id, sn);
+    this.nodeById.clear();
+    for (const sn of this.simNodes) this.nodeById.set(sn.id, sn);
+    const nodeById = this.nodeById;
 
     // Build simulation links
     this.simLinks = [];
@@ -754,9 +942,6 @@ export class HomeGPUScene {
         graphLink: link,
       });
     }
-
-    console.log('[HomeGPU] Scene objects:', this.simLinks.length, 'simLinks rendered',
-      '(skipped', links.length - this.simLinks.length, 'orphan links)');
 
     // Create Three.js objects for nodes
     for (const node of this.simNodes) {
@@ -806,10 +991,6 @@ export class HomeGPUScene {
     logoMesh.scale.set(logoScale, logoScale, 1);
     group.add(logoMesh);
 
-    // Soft glow behind the logo
-    const go = new Mesh(new SphereGeometry(outerR * 1.55, 10, 10), MAT_GLOW_OUTER);
-    group.add(go);
-
     this.nodeGroup.add(group);
     node.__obj = group;
 
@@ -834,14 +1015,6 @@ export class HomeGPUScene {
     core.scale.setScalar(radius);
     group.add(core);
 
-    const gi = new Mesh(GEO_GLOW_INNER, MAT_GLOW_INNER);
-    gi.scale.setScalar(radius * 1.6);
-    group.add(gi);
-
-    const go = new Mesh(GEO_GLOW_OUTER, MAT_GLOW_OUTER);
-    go.scale.setScalar(radius * 2.4);
-    group.add(go);
-
     this.nodeGroup.add(group);
     node.__obj = group;
   }
@@ -849,26 +1022,27 @@ export class HomeGPUScene {
   private static CURVE_SEGMENTS = 30;
 
   private createLinkVisual(link: SimLink): void {
-    const lineColor = EDGE_COLORS[link.eventType] ?? 0xffd200;
     const numPoints = HomeGPUScene.CURVE_SEGMENTS + 1;
     const positions = new Float32Array(numPoints * 3);
     const geo = new BufferGeometry();
     geo.setAttribute('position', new Float32BufferAttribute(positions, 3));
-    const mat = new LineBasicMaterial({
-      color: lineColor, transparent: true, opacity: 0.6,
-    });
-    const line = new Line(geo, mat);
+
+    // Core edge line
+    const line = new Line(geo, getLinkMat(link.eventType));
     this.linkGroup.add(line);
     link.__line = line;
-    link.__origColor = lineColor;
+    link.__origColor = EDGE_COLORS[link.eventType] ?? 0xffd200;
+
+    // Glow trail — same geometry, wider additive-blended line behind
+    const glowGeo = new BufferGeometry();
+    glowGeo.setAttribute('position', new Float32BufferAttribute(new Float32Array(numPoints * 3), 3));
+    const glowLine = new Line(glowGeo, getLinkGlowMat(link.eventType));
+    this.linkGlowGroup.add(glowLine);
+    link.__glowLine = glowLine;
   }
 
   private createParticleVisual(link: SimLink): void {
-    const color = PARTICLE_COLORS[link.eventType] ?? 0xffe566;
-    const mat = new MeshBasicMaterial({
-      color, transparent: true, opacity: 0.8,
-    });
-    const mesh = new Mesh(GEO_PARTICLE, mat);
+    const mesh = new Mesh(GEO_PARTICLE, getParticleMat(link.eventType));
     mesh.scale.setScalar(1.2);
     this.particleGroup.add(mesh);
     link.__particle = mesh;
@@ -887,20 +1061,19 @@ export class HomeGPUScene {
 
   private disposeObject(obj: Object3D): void {
     if (obj instanceof Mesh) {
-      if (obj.geometry !== GEO_WALLET && obj.geometry !== GEO_GLOW_INNER &&
-          obj.geometry !== GEO_GLOW_OUTER && obj.geometry !== GEO_PARTICLE) {
+      if (obj.geometry !== GEO_WALLET && obj.geometry !== GEO_PARTICLE && obj.geometry !== GEO_GLOW && obj.geometry !== GEO_HIGHLIGHT) {
         obj.geometry.dispose();
       }
-      if (!Array.isArray(obj.material)) {
-        if (obj.material !== MAT_WALLET && obj.material !== MAT_GLOW_INNER &&
-            obj.material !== MAT_GLOW_OUTER && !_hubMatCache.has(obj.material.uuid ?? '')) {
-          obj.material.dispose();
-        }
+      if (!Array.isArray(obj.material) && !_sharedMats.has(obj.material)) {
+        obj.material.dispose();
       }
     }
     if (obj instanceof Line) {
       obj.geometry.dispose();
-      if (!Array.isArray(obj.material)) obj.material.dispose();
+      // Link materials are shared per event type — don't dispose them
+      if (!Array.isArray(obj.material) && !_sharedMats.has(obj.material)) {
+        obj.material.dispose();
+      }
     }
     if (obj.children) {
       [...obj.children].forEach((c) => this.disposeObject(c));
@@ -928,6 +1101,7 @@ export class HomeGPUScene {
     this.controls?.dispose();
     this.clearGroup(this.nodeGroup);
     this.clearGroup(this.linkGroup);
+    this.clearGroup(this.linkGlowGroup);
     this.clearGroup(this.particleGroup);
     this.clearGroup(this.labelGroup);
     if (this.tooltipEl?.parentNode) this.tooltipEl.parentNode.removeChild(this.tooltipEl);
