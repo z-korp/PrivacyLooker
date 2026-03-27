@@ -1,13 +1,27 @@
 'use client';
 
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useCallback } from 'react';
 import { useTransactions } from '@/hooks/useTransactions';
+import { useAppStore } from '@/store/appStore';
 import type { HomeGPUScene as HomeGPUSceneT } from './HomeGPUScene';
+import type { GraphNode, GraphLink } from '@/types/graph';
 
 export default function HomeGPUCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<HomeGPUSceneT | null>(null);
   const { graphData, loading } = useTransactions();
+
+  const setSelectedNode = useAppStore((s) => s.setSelectedNode);
+  const setSelectedLink = useAppStore((s) => s.setSelectedLink);
+
+  const onSelectNode = useCallback(
+    (node: GraphNode | null) => setSelectedNode(node),
+    [setSelectedNode],
+  );
+  const onSelectLink = useCallback(
+    (link: GraphLink | null) => setSelectedLink(link),
+    [setSelectedLink],
+  );
 
   // Mount / unmount the WebGPU scene
   useEffect(() => {
@@ -22,6 +36,7 @@ export default function HomeGPUCanvas() {
       if (cancelled) return;
 
       scene = new HomeGPUScene();
+      scene.setCallbacks({ onSelectNode, onSelectLink });
       sceneRef.current = scene;
       await scene.init(el);
     })();
@@ -31,7 +46,13 @@ export default function HomeGPUCanvas() {
       scene?.dispose();
       sceneRef.current = null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep callbacks fresh if store selectors change
+  useEffect(() => {
+    sceneRef.current?.setCallbacks({ onSelectNode, onSelectLink });
+  }, [onSelectNode, onSelectLink]);
 
   // Push data updates into the scene
   useEffect(() => {

@@ -135,7 +135,7 @@ export function GifExporter() {
   const isActive = exportState !== 'idle';
 
   return (
-    <div className="fixed bottom-24 right-5 z-20 flex flex-col items-end gap-2">
+    <div className="fixed bottom-24 right-6 z-20 flex flex-col items-end gap-2">
       {/* Info panel */}
       <AnimatePresence>
         {showPanel && !isActive && (
@@ -143,12 +143,11 @@ export function GifExporter() {
             initial={{ opacity: 0, y: 6, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 6, scale: 0.95 }}
-            className="rounded-xl border p-4 w-64 flex flex-col gap-3 noise-texture"
+            className="rounded-xl border p-4 w-64 flex flex-col gap-3"
             style={{
-              background: 'rgba(10,10,10,0.6)',
-              borderColor: true ? 'rgba(255,210,0,0.15)' : 'rgba(255,255,255,0.08)',
-              backdropFilter: 'blur(20px)',
-              WebkitBackdropFilter: 'blur(20px)',
+              background: 'rgba(0,0,0,0.92)',
+              borderColor: true ? 'rgba(255,210,0,0.25)' : 'rgba(255,255,255,0.1)',
+              backdropFilter: 'blur(16px)',
             }}
           >
             <p className="font-mono text-[10px] text-white/60 leading-relaxed">
@@ -183,12 +182,11 @@ export function GifExporter() {
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 6 }}
-            className="rounded-xl border p-4 w-64 flex flex-col gap-3 noise-texture"
+            className="rounded-xl border p-4 w-64 flex flex-col gap-3"
             style={{
-              background: 'rgba(10,10,10,0.6)',
-              borderColor: true ? 'rgba(255,210,0,0.2)' : 'rgba(255,255,255,0.08)',
-              backdropFilter: 'blur(20px)',
-              WebkitBackdropFilter: 'blur(20px)',
+              background: 'rgba(0,0,0,0.94)',
+              borderColor: true ? 'rgba(255,210,0,0.35)' : 'rgba(255,255,255,0.15)',
+              backdropFilter: 'blur(16px)',
             }}
           >
             <div className="flex items-center justify-between">
@@ -249,11 +247,11 @@ export function GifExporter() {
         disabled={isActive}
         className="w-10 h-10 rounded-full flex items-center justify-center border transition-all"
         animate={{
-          borderColor: true ? 'rgba(255,210,0,0.2)' : 'rgba(255,255,255,0.1)',
+          borderColor: true ? 'rgba(255,210,0,0.4)' : 'rgba(255,255,255,0.15)',
           backgroundColor: showPanel && !isActive
-            ? true ? 'rgba(255,210,0,0.08)' : 'rgba(255,255,255,0.06)'
-            : 'rgba(10,10,10,0.55)',
-          boxShadow: showPanel ? '0 0 10px 2px rgba(255,210,0,0.1)' : 'none',
+            ? true ? 'rgba(255,210,0,0.12)' : 'rgba(255,255,255,0.08)'
+            : 'rgba(0,0,0,0.7)',
+          boxShadow: showPanel ? '0 0 14px 3px rgba(255,210,0,0.2)' : 'none',
         }}
         title="Export animated GIF"
         whileTap={{ scale: 0.92 }}

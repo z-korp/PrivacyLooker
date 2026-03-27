@@ -64,9 +64,9 @@ export function ToggleSwitch({
             backgroundColor: value && useYellow ? '#FFD200' : '#ffffff',
             boxShadow:
               value && useYellow
-                ? '0 0 6px 2px rgba(255,210,0,0.4)'
+                ? '0 0 10px 3px rgba(255,210,0,0.7)'
                 : value
-                ? '0 0 4px 2px rgba(255,255,255,0.2)'
+                ? '0 0 6px 2px rgba(255,255,255,0.4)'
                 : 'none',
           }}
           transition={{ type: 'spring', stiffness: 500, damping: 30 }}

@@ -1,12 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { GraphData, LiveTransaction, WrapperContract, DataProvenance } from '@/types/graph';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { GraphData, WrapperContract, DataProvenance } from '@/types/graph';
 import { buildGraphData } from '@/lib/graphUtils';
 import { useAppStore, LiveStats } from '@/store/appStore';
-
-/** Debounce delay (ms) before re-fetching on filter changes */
-const DEBOUNCE_MS = 300;
 
 export interface UseTransactionsResult {
   graphData: GraphData;
@@ -43,14 +40,9 @@ export function useTransactions(): UseTransactionsResult {
   const selectedWeek    = useAppStore((s) => s.selectedWeek);
   const selectedToken   = useAppStore((s) => s.selectedTimelineToken);
 
-  // Raw API response — graph is derived via useMemo
-  const [rawData, setRawData] = useState<{
-    transactions: LiveTransaction[];
-    wrapperContracts: WrapperContract[];
-  } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const mountedRef             = useRef(true);
-  const debounceRef            = useRef<ReturnType<typeof setTimeout>>();
+  const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
+  const [loading, setLoading]     = useState(true);
+  const mountedRef                = useRef(true);
 
   const fetchLive = useCallback(async () => {
     if (!mountedRef.current) return;
@@ -68,7 +60,7 @@ export function useTransactions(): UseTransactionsResult {
       const res  = await fetch(url);
       if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
       const data: {
-        transactions: LiveTransaction[];
+        transactions: Parameters<typeof buildGraphData>[0];
         wrapperContracts: WrapperContract[];
         provenance: DataProvenance | null;
         error?: string;
@@ -76,10 +68,10 @@ export function useTransactions(): UseTransactionsResult {
 
       if (!mountedRef.current) return;
 
-      setRawData({
-        transactions: data.transactions ?? [],
-        wrapperContracts: data.wrapperContracts ?? [],
-      });
+      const graph = buildGraphData(data.transactions ?? [], data.wrapperContracts ?? []);
+      setGraphData(graph);
+      setStats(graph.nodes.length, graph.links.length);
+      setLiveStats(computeStats(graph));
       setProvenance(data.provenance ?? null);
       setDataError(null);
     } catch (err) {
@@ -88,30 +80,13 @@ export function useTransactions(): UseTransactionsResult {
     } finally {
       if (mountedRef.current) { setLiveLoading(false); setLoading(false); }
     }
-  }, [setLiveLoading, setProvenance, setDataError, selectedWeek, selectedToken]);
+  }, [setStats, setLiveStats, setLiveLoading, setProvenance, setDataError, selectedWeek, selectedToken]);
 
-  // Memoize graph construction — only rebuilds when raw API data changes
-  const graphData = useMemo<GraphData>(() => {
-    if (!rawData) return { nodes: [], links: [] };
-    return buildGraphData(rawData.transactions, rawData.wrapperContracts);
-  }, [rawData]);
-
-  // Push derived stats into the store whenever graphData changes
-  useEffect(() => {
-    if (!rawData) return;
-    setStats(graphData.nodes.length, graphData.links.length);
-    setLiveStats(computeStats(graphData));
-  }, [graphData, rawData, setStats, setLiveStats]);
-
-  // Debounced re-fetch when filters change
+  // Re-fetch only when the week or token filter changes
   useEffect(() => {
     mountedRef.current = true;
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(fetchLive, DEBOUNCE_MS);
-    return () => {
-      mountedRef.current = false;
-      clearTimeout(debounceRef.current);
-    };
+    fetchLive();
+    return () => { mountedRef.current = false; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWeek, selectedToken]);
 

@@ -29,8 +29,8 @@ export function DataProvenanceBadge() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-            className="rounded-xl border border-white/8 p-4 flex flex-col gap-3 w-72 noise-texture"
-            style={{ background: 'rgba(10,10,10,0.6)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}
+            className="rounded-xl border border-white/10 p-4 flex flex-col gap-3 w-72"
+            style={{ background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(16px)' }}
           >
             {/* Header */}
             <div className="flex items-center gap-2">
@@ -121,8 +121,8 @@ export function DataProvenanceBadge() {
       {/* ── Collapsed pill / toggle ─────────────────────────────────────────── */}
       <motion.button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/8 hover:border-green-400/30 transition-colors"
-        style={{ background: 'rgba(10,10,10,0.55)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}
+        className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/10 hover:border-green-400/40 transition-colors"
+        style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(12px)' }}
         whileHover={{ scale: 1.03 }}
         whileTap={{ scale: 0.97 }}
       >

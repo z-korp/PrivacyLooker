@@ -24,7 +24,7 @@ export function Legend() {
         <div className="flex items-center gap-2">
           <div
             className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-            style={{ backgroundColor: '#FFD200', boxShadow: '0 0 6px 1px rgba(255,210,0,0.35)' }}
+            style={{ backgroundColor: '#FFD200', boxShadow: '0 0 8px 2px rgba(255,210,0,0.6)' }}
           />
           <span className="font-mono text-[10px] tracking-wider uppercase font-medium" style={{ color: '#FFD200' }}>
             FHE Encrypted Ledger
@@ -37,7 +37,7 @@ export function Legend() {
 
       {/* Node types */}
       <div className="flex flex-col gap-1.5">
-        <span className="font-mono text-[8px] text-white/20 tracking-widest uppercase font-medium">Nodes</span>
+        <span className="font-mono text-[9px] text-white/20 tracking-widest uppercase">Nodes</span>
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <div
@@ -57,7 +57,7 @@ export function Legend() {
 
       {/* Edge types */}
       <div className="flex flex-col gap-1.5">
-        <span className="font-mono text-[8px] text-white/20 tracking-widest uppercase font-medium">Transactions</span>
+        <span className="font-mono text-[9px] text-white/20 tracking-widest uppercase">Transactions</span>
         <div className="flex flex-col gap-1.5">
           {TX_TYPES.map((t) => (
             <div key={t.label} className="flex items-center gap-2">
@@ -76,7 +76,7 @@ export function Legend() {
 
       {/* Token chips */}
       <div className="flex flex-col gap-1">
-        <span className="font-mono text-[8px] text-white/20 tracking-widest uppercase font-medium">Tokens</span>
+        <span className="font-mono text-[9px] text-white/20 tracking-widest uppercase">Tokens</span>
         <div className="flex flex-wrap gap-1">
           {TOKEN_PILLS.map((t) => (
             <span
