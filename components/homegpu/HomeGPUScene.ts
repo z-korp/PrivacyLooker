@@ -784,16 +784,16 @@ export class HomeGPUScene {
         // Pulse effect: scale bump when particles arrive, decays smoothly
         const pulse = node.__pulse ?? 0;
         if (pulse > 0.001) {
-          const scaleBoost = 1 + pulse * 0.25;
+          const scaleBoost = 1 + pulse * 0.15;
           node.__obj.scale.setScalar(scaleBoost);
           // Also boost first child mesh emissive if it's a hub (Phong material)
           if (node.isWrapperContract) {
             const logo = node.__obj.children[0] as Mesh;
             if (logo?.material && 'emissiveIntensity' in logo.material) {
-              (logo.material as MeshPhongNodeMaterial).emissiveIntensity = 0.2 + pulse * 1.5;
+              (logo.material as MeshPhongNodeMaterial).emissiveIntensity = 0.2 + pulse * 0.8;
             }
           }
-          node.__pulse = pulse * 0.92; // exponential decay
+          node.__pulse = pulse * 0.97; // slow decay (~100 frames to fade)
         } else if (node.__pulse !== undefined) {
           node.__obj.scale.setScalar(1);
           if (node.isWrapperContract) {
@@ -885,7 +885,7 @@ export class HomeGPUScene {
       // Particle wrapped around → it arrived at the target node → trigger pulse
       if (nextT < prevT) {
         const target = link.target;
-        target.__pulse = Math.min((target.__pulse ?? 0) + 0.5, 1.0);
+        target.__pulse = Math.min((target.__pulse ?? 0) + 0.25, 1.0);
       }
 
       link.__particleT = nextT;
