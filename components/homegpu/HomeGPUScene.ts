@@ -784,9 +784,7 @@ export class HomeGPUScene {
         // Pulse effect: scale bump when particles arrive, decays smoothly
         const pulse = node.__pulse ?? 0;
         if (pulse > 0.001) {
-          const scaleBoost = 1 + pulse * 0.15;
-          node.__obj.scale.setScalar(scaleBoost);
-          // Also boost first child mesh emissive if it's a hub (Phong material)
+          // Emissive glow boost only — no scale change
           if (node.isWrapperContract) {
             const logo = node.__obj.children[0] as Mesh;
             if (logo?.material && 'emissiveIntensity' in logo.material) {
@@ -795,7 +793,6 @@ export class HomeGPUScene {
           }
           node.__pulse = pulse * 0.97; // slow decay (~100 frames to fade)
         } else if (node.__pulse !== undefined) {
-          node.__obj.scale.setScalar(1);
           if (node.isWrapperContract) {
             const logo = node.__obj.children[0] as Mesh;
             if (logo?.material && 'emissiveIntensity' in logo.material) {
